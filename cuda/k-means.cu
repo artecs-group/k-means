@@ -125,24 +125,24 @@ __global__ void coarse_reduce(float* __restrict__ means_x,
   extern __shared__ float shared_data[];
 
   const int index = threadIdx.x;
-  const int y_offset = blockDim.x;
+  const int y = threadIdx.x + blockDim.x;
 
   shared_data[index] = new_sum_x[index];
-  shared_data[y_offset + index] = new_sum_y[index];
+  shared_data[y] = new_sum_y[index];
   __syncthreads();
 
   for (int stride = blockDim.x / 2; stride >= k; stride /= 2) {
     if (index < stride) {
       shared_data[index] += shared_data[index + stride];
-      shared_data[y_offset + index] += shared_data[y_offset + index + stride];
+      shared_data[y] += shared_data[y + stride];
     }
     __syncthreads();
   }
 
   if (index < k) {
     const int count = max(1, counts[index]);
-    means_x[index] = new_sum_x[index] / count;
-    means_y[index] = new_sum_y[index] / count;
+    means_x[index] = shared_data[index] / count;
+    means_y[index] = shared_data[y] / count;
     new_sum_y[index] = 0;
     new_sum_x[index] = 0;
     counts[index] = 0;
