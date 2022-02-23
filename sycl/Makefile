@@ -13,27 +13,28 @@ else ifeq ($(DEVICE), igpu)
 endif
 
 CC = dpcpp
-CFLAGS = -D$(PDEVICE) -std=c++11 -O3 -fsycl
+CFLAGS = -D$(PDEVICE) -std=c++17 -fsycl -O3 
 CLINK = -fsycl-device-code-split=per_kernel
 
 ifeq ($(PDEVICE),NVIDIA_DEVICE)
+	CC = clang++
 	CFLAGS += -fsycl-targets=nvptx64-nvidia-cuda
 endif
 
-main: main.o ./device/device.o
-	$(CC) $(CFLAGS) $(CLINK) main.o ./device/device.o -o k-means
+main: ./device/device.o main.o
+	$(CC) $(CFLAGS) $(CLINK) main.o ./device/device.o -o k_means
 
-main.o: ./main.cpp ./device/device.o
+main.o: ./device/device.o
 	$(CC) $(CFLAGS) main.cpp -c -o main.o
 
-device.o: ./device/device.hpp ./device/device.cpp
+./device/device.o: ./device/device.hpp
 	$(CC) $(CFLAGS) ./device/device.cpp -c -o ./device/device.o
 
-run: k-means
-	./k-means ../data/100k.csv 4 300
+run: main
+	./k_means ../data/100k.csv 4 300
 
 .PHONY: clean
 clean:
-	rm -f k-means \
+	rm -f k_means \
 	*.o \
 	./device/*.o

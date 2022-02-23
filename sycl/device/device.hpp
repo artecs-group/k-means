@@ -46,13 +46,15 @@ class Device {
         void sync();
         void fine_reduce();
         void coarse_reduce();
-        void save_solution(std::vector<float> h_mean_x, std::vector<float> h_mean_y);
+        void save_solution(std::vector<float>& h_mean_x, std::vector<float>& h_mean_y);
     private:
         sycl::queue _queue;
 
         sycl::queue _get_queue();
         int _get_block_size();
-        float _squared_l2_distance(float x_1, float y_1, float x_2, float y_2);
 };
+
+
+float squared_l2_distance(float x_1, float y_1, float x_2, float y_2);
 
 #endif

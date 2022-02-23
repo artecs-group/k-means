@@ -22,16 +22,16 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     sum_y   = malloc_device<float>(sum_bytes, _queue);
     counts  = malloc_device<int>(count_bytes, _queue);
 
-    _queue.memcpy(point_x, h_x, point_bytes);
-    _queue.memcpy(point_y, h_y, point_bytes);
+    _queue.memcpy(point_x, h_x.data(), point_bytes);
+    _queue.memcpy(point_y, h_y.data(), point_bytes);
     sync();
 
     //init means
     std::mt19937 rng(std::random_device{}());
     std::shuffle(h_x.begin(), h_x.end(), rng);
     std::shuffle(h_y.begin(), h_y.end(), rng);
-    _queue.memcpy(mean_x, h_x, mean_bytes);
-    _queue.memcpy(mean_y, h_y, mean_bytes);
+    _queue.memcpy(mean_x, h_x.data(), mean_bytes);
+    _queue.memcpy(mean_y, h_y.data(), mean_bytes);
 
     _queue.memset(sum_x, 0, sum_bytes);
     _queue.memset(sum_y, 0, sum_bytes);
@@ -70,19 +70,12 @@ sycl::queue Device::_get_queue() {
 
 int Device::_get_block_size() {
     int work_items = _queue.get_device().get_info<cl::sycl::info::device::max_work_item_sizes>()[0];
-    return (size + work_items - 1) / work_items;
+    return (point_size + work_items - 1) / work_items;
 }
 
 
 void Device::sync() {
     _queue.wait();
-}
-
-
-float Device::_squared_l2_distance(float x_1, float y_1, float x_2, float y_2) {
-    float a = x_1 - x_2;
-    float b = y_1 - y_2;
-    return a*a + b*b;
 }
 
 
@@ -92,6 +85,16 @@ void Device::fine_reduce() {
 
     _queue.submit([&](handler& h) {
         // * 3 for x, y and counts.
+        int point_s = this-> point_size;
+        int k = this->k;
+        float* point_x = this->point_x;
+        float* point_y = this->point_y;
+        float* mean_x = this->mean_x;
+        float* mean_y = this->mean_y;
+        float* sum_x = this->sum_x;
+        float* sum_y = this->sum_y;
+        int* counts = this->counts;
+
         int s_size = 3 * work_items * sizeof(float);
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
 
@@ -99,7 +102,7 @@ void Device::fine_reduce() {
             const int global_index = item.get_global_id(0);
 			const int local_index = item.get_local_id(0);
 
-            if (global_index >= point_size) return;
+            if (global_index >= point_s) return;
 
             // Load the mean values into shared memory.
             if (local_index < k) {
@@ -116,7 +119,7 @@ void Device::fine_reduce() {
             int best_cluster = -1;
             for (int cluster = 0; cluster < k; ++cluster) {
                 const float distance = 
-                    _squared_l2_distance(x_value, y_value, shared_data[cluster], shared_data[k + cluster]);
+                    squared_l2_distance(x_value, y_value, shared_data[cluster], shared_data[k + cluster]);
                 
                 if (distance < best_distance) {
                     best_distance = distance;
@@ -165,6 +168,13 @@ void Device::coarse_reduce() {
     int group_size = 1;
 
     _queue.submit([&](handler& h) {
+        int k = this->k;
+        int* counts = this->counts;
+        float* mean_x = this->mean_x;
+        float* mean_y = this->mean_y;
+        float* sum_x = this->sum_x;
+        float* sum_y = this->sum_y;
+
         // * 2 for x and y. Will have k * blocks threads for the coarse reduction.
         int s_size = 2 * work_items * sizeof(float);
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
@@ -198,8 +208,15 @@ void Device::coarse_reduce() {
 }
 
 
-void Device::save_solution(std::vector<float> h_mean_x, std::vector<float> h_mean_y) {
-    _queue.memcpy(h_mean_x, mean_x, mean_bytes);
-    _queue.memcpy(h_mean_y, mean_y, mean_bytes);
+void Device::save_solution(std::vector<float>& h_mean_x, std::vector<float>& h_mean_y) {
+    _queue.memcpy(h_mean_x.data(), mean_x, mean_bytes);
+    _queue.memcpy(h_mean_y.data(), mean_y, mean_bytes);
     sync();
+}
+
+
+float squared_l2_distance(float x_1, float y_1, float x_2, float y_2) {
+    float a = x_1 - x_2;
+    float b = y_1 - y_2;
+    return a*a + b*b;
 }
