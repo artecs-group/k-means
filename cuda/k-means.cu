@@ -176,6 +176,7 @@ int main(int argc, const char* argv[]) {
   Data d_data(number_of_elements, h_x, h_y);
 
   std::mt19937 rng(std::random_device{}());
+  rng.seed(0);
   std::shuffle(h_x.begin(), h_x.end(), rng);
   std::shuffle(h_y.begin(), h_y.end(), rng);
   Data d_means(k, h_x, h_y);

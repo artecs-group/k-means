@@ -3,6 +3,7 @@
 #define _DEVICE_K_MEANS_
 
 #include <vector>
+#include <tuple>
 #include <string>
 #include <CL/sycl.hpp>
 
@@ -51,7 +52,7 @@ class Device {
         sycl::queue _queue;
 
         sycl::queue _get_queue();
-        int _get_block_size();
+        std::tuple<int,int,int> _get_group_work_items(int elements);
 };
 
 

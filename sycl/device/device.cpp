@@ -10,7 +10,7 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     point_size  = h_x.size();
     point_bytes = point_size * sizeof(float);
     mean_bytes  = k * sizeof(float);
-    sum_size    = k * _get_block_size();
+    sum_size    = k * std::get<0>(_get_group_work_items(point_size));
     sum_bytes   = sum_size * sizeof(float);
     count_bytes = sum_bytes * sizeof(int);
 
@@ -28,6 +28,7 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
 
     //init means
     std::mt19937 rng(std::random_device{}());
+    rng.seed(0);
     std::shuffle(h_x.begin(), h_x.end(), rng);
     std::shuffle(h_y.begin(), h_y.end(), rng);
     _queue.memcpy(mean_x, h_x.data(), mean_bytes);
@@ -68,9 +69,25 @@ sycl::queue Device::_get_queue() {
 }
 
 
-int Device::_get_block_size() {
-    int work_items = _queue.get_device().get_info<cl::sycl::info::device::max_work_item_sizes>()[0];
-    return (point_size + work_items - 1) / work_items;
+/*
+    Case 1) elements <= max_group_size 
+            * group_size = elements
+            * work_items = elements
+            * groups     = 1
+    
+    Case 2) elements > max_group_size
+            * group_size = max_group_size
+            * work_items = elements + group_size - (elements % group_size)
+            * groups     = work_items / group_size
+
+*/
+std::tuple<int,int,int> Device::_get_group_work_items(int elements) {
+    const int max_group  = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
+    const int group_size = (elements <= max_group) ? elements : max_group;
+    const int work_items = (elements <= max_group) ? elements : elements + group_size - (elements % group_size);
+    const int groups     = (elements <= max_group) ? 1 : work_items / group_size;
+
+    return std::tuple<int,int,int>(groups, group_size, work_items);
 }
 
 
@@ -80,8 +97,8 @@ void Device::sync() {
 
 
 void Device::fine_reduce() {
-    int work_items = _queue.get_device().get_info<cl::sycl::info::device::max_work_item_sizes>()[0];
-    int group_size = _get_block_size();
+    int group_size, work_items, groups;
+    std::tie (groups, group_size, work_items) = _get_group_work_items(point_size);
 
     _queue.submit([&](handler& h) {
         // * 3 for x, y and counts.
@@ -95,7 +112,7 @@ void Device::fine_reduce() {
         float* sum_y = this->sum_y;
         int* counts = this->counts;
 
-        int s_size = 3 * work_items * sizeof(float);
+        int s_size = 3 * group_size * sizeof(float);
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
 
         h.parallel_for<class fine_reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
@@ -164,11 +181,12 @@ void Device::fine_reduce() {
 
 
 void Device::coarse_reduce() {
-    int work_items = _get_block_size() * k;
-    int group_size = 1;
+    int group_size, work_items, groups;
+    std::tie (groups, group_size, work_items) = _get_group_work_items(sum_size);
 
     _queue.submit([&](handler& h) {
         int k = this->k;
+        int sum_s = sum_size;
         int* counts = this->counts;
         float* mean_x = this->mean_x;
         float* mean_y = this->mean_y;
@@ -176,12 +194,15 @@ void Device::coarse_reduce() {
         float* sum_y = this->sum_y;
 
         // * 2 for x and y. Will have k * blocks threads for the coarse reduction.
-        int s_size = 2 * work_items * sizeof(float);
+        int s_size = 2 * sum_s * sizeof(float);
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
 
         h.parallel_for<class coarse_reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
+            const int global_index = item.get_global_id(0);
             const int index = item.get_local_id(0);
             const int y = item.get_local_id(0) + item.get_local_range(0);
+
+            if (global_index >= sum_s) return;
 
             shared_data[index] = sum_x[index];
             shared_data[y]     = sum_y[index];

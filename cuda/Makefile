@@ -1,16 +1,16 @@
 CC = nvcc
 CFLAGS = -std=c++11 -O3
 
-k-means: k-means.o
-	$(CC) $(CFLAGS) $(CLINK) k-means.o -o k-means
+k_means: k_means.o
+	$(CC) $(CFLAGS) $(CLINK) k_means.o -o k_means
 
-k-means.o: ./k-means.cu
-	$(CC) $(CFLAGS) k-means.cu -c -o k-means.o
+k_means.o: ./k_means.cu
+	$(CC) $(CFLAGS) k_means.cu -c -o k_means.o
 
-run: k-means
-	./k-means ../data/100k.csv 4 300
+run: k_means
+	./k_means ../data/100k.csv 4 300
 
 .PHONY: clean
 clean:
-	rm -f k-means \
+	rm -f k_means \
 	*.o
