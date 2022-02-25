@@ -7,19 +7,20 @@
 #include "device/device.hpp"
 
 int main(int argc, const char* argv[]) {
-    if (argc < 3) {
-        std::cerr << "usage: k-means <data-file> <k> [iterations]" << std::endl;
+    if (argc < 4) {
+        std::cerr << "usage: k_means <data-file> <k> <number-points> [iterations]" << std::endl;
         std::exit(EXIT_FAILURE);
     }
 
     const auto k = std::atoi(argv[2]);
-    const auto number_of_iterations = (argc == 4) ? std::atoi(argv[3]) : 300;
+    const auto n_points = std::atoi(argv[3]);
+    const auto number_of_iterations = (argc == 5) ? std::atoi(argv[4]) : 300;
 
     std::vector<float> h_x;
     std::vector<float> h_y;
     std::ifstream stream(argv[1]);
     std::string line;
-    while (std::getline(stream, line)) {
+    for(int i{n_points}; std::getline(stream, line) && i > 0; i--) {
         std::istringstream line_stream(line);
         float x, y;
         uint16_t label;
