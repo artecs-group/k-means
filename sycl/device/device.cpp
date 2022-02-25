@@ -64,7 +64,7 @@ sycl::queue Device::_get_queue() {
 #endif
 
 	sycl::queue queue{selector};
-	std::cout << "Running on " << queue.get_device().get_info<sycl::info::device::name>() << std::endl;
+	std::cout << "Running on \"" << queue.get_device().get_info<sycl::info::device::name>() << "\" under SYCL." << std::endl;
     return queue;
 }
 

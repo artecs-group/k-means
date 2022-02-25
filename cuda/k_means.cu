@@ -174,6 +174,11 @@ int main(int argc, const char* argv[]) {
 
   const size_t number_of_elements = h_x.size();
 
+  // Show GPU name
+  cudaDeviceProp gpu_props;
+  cudaGetDeviceProperties(&gpu_props, 0);
+  std::cout << "Running on \"" << gpu_props.name << "\" under CUDA." << std::endl;
+
   Data d_data(number_of_elements, h_x, h_y);
 
   std::mt19937 rng(std::random_device{}());
@@ -182,11 +187,8 @@ int main(int argc, const char* argv[]) {
   std::shuffle(h_y.begin(), h_y.end(), rng);
   Data d_means(k, h_x, h_y);
 
-  const int threads = 1024;
+  const int threads = gpu_props.maxThreadsPerBlock;
   const int blocks = (number_of_elements + threads - 1) / threads;
-
-  std::cerr << "Processing " << number_of_elements << " points on " << blocks
-            << " blocks x " << threads << " threads" << std::endl;
 
   // * 3 for x, y and counts.
   const int fine_shared_memory = 3 * threads * sizeof(float);
