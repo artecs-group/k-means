@@ -40,18 +40,21 @@ class Device {
     public:
         float *point_x{nullptr}, *point_y{nullptr}, *mean_x{nullptr}, *mean_y{nullptr}, *sum_x{nullptr}, *sum_y{nullptr};
         int* counts{nullptr};
-        int k{0}, point_size{0}, point_bytes{0}, mean_bytes{0}, sum_size{0}, sum_bytes{0}, count_bytes{0}, point_size_pad{0};
+        int k{0}, point_size{0}, point_bytes{0}, mean_bytes{0}, sum_size{0}, sum_bytes{0}, 
+            count_bytes{0}, point_size_pad{0}, group_size{0}, work_items{0}, groups{0};
 
         Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y);
         ~Device();
-        void sync();
-        void fine_reduce();
-        void coarse_reduce();
+        void run_k_means(int iterations);
         void save_solution(std::vector<float>& h_mean_x, std::vector<float>& h_mean_y);
     private:
         sycl::queue _queue;
 
         sycl::queue _get_queue();
+        void _sync();
+        void _fine_reduce();
+        void _middle_reduce();
+        void _coarse_reduce();
         std::tuple<int,int,int> _get_group_work_items(int elements);
 };
 

@@ -8,8 +8,6 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     _queue = _get_queue();
     
     point_size     = h_x.size();
-
-    int group_size, work_items, groups;
     std::tie (groups, group_size, work_items) = _get_group_work_items(point_size);
 
     point_size_pad = point_size + (work_items - point_size);
@@ -17,7 +15,7 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     mean_bytes     = k * sizeof(float);
     sum_size       = k * groups;
     sum_bytes      = sum_size * sizeof(float);
-    count_bytes    = sum_bytes * sizeof(int);
+    count_bytes    = sum_size * sizeof(int);
 
     point_x = malloc_device<float>(point_size_pad * sizeof(float), _queue);
     point_y = malloc_device<float>(point_size_pad * sizeof(float), _queue);
@@ -78,6 +76,18 @@ sycl::queue Device::_get_queue() {
 }
 
 
+void Device::run_k_means(int iterations) {
+    for (size_t i{0}; i < iterations; ++i) {
+        _fine_reduce();
+        _sync();
+        _middle_reduce();
+        _sync();
+        _coarse_reduce();
+        _sync();
+    }
+}
+
+
 /*
     Case 1) elements <= max_group_size 
             * group_size = elements
@@ -105,8 +115,7 @@ void Device::sync() {
 }
 
 
-void Device::fine_reduce() {
-    int group_size, work_items, groups;
+void Device::_fine_reduce() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(point_size);
 
     _queue.submit([&](handler& h) {
@@ -187,8 +196,53 @@ void Device::fine_reduce() {
 }
 
 
-void Device::coarse_reduce() {
-    int group_size, work_items, groups;
+void Device::_middle_reduce() {
+    std::tie (groups, group_size, work_items) = _get_group_work_items(groups*k);
+    while (groups > 1) {
+        _queue.submit([&](handler& h) {
+            int k = this->k;
+            float* sum_x = this->sum_x;
+            float* sum_y = this->sum_y;
+
+            // * 2 for x and y. Will have k * blocks threads for the coarse reduction.
+            int s_size = 2 * groups*k * sizeof(float);
+            sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
+
+            h.parallel_for<class middle_reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
+                const int global_index = item.get_global_id(0);
+                const int index = item.get_local_id(0);
+                const int y = item.get_local_id(0) + item.get_local_range(0);
+
+                shared_data[index] = sum_x[global_index];
+                shared_data[y]     = sum_y[global_index];
+                item.barrier(sycl::access::fence_space::local_space);
+
+                for (int stride = item.get_local_range(0) >> 1; stride >= k; stride >>= 1) {
+                    if (index < stride) {
+                        shared_data[index] += shared_data[index + stride];
+                        shared_data[y]     += shared_data[y + stride];
+                    }
+                    item.barrier(sycl::access::fence_space::local_space);
+                }
+
+                if (index < k) {
+                    sum_x[]    = shared_data[x];
+                    sum_y[]    = shared_data[y];
+                }
+            });
+        });
+        std::tie (groups, group_size, work_items) = _get_group_work_items(groups*k);
+    }
+     
+}
+
+
+void Device::_coarse_reduce() {
+    // GT1030 -> gs = 392, wi = 392, g = 1
+
+    // UHD630 -> gs = 256, wi = 100096, g = 391; size = 100000
+    // UHD630 -> gs = 256, wi = 1792,   g = 7;   size = 4*7 = 1564
+    // UHD630 -> gs = 28,  wi = 28,     g = 1;   size = 4*7 = 28
     std::tie (groups, group_size, work_items) = _get_group_work_items(sum_size);
 
     _queue.submit([&](handler& h) {

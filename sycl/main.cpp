@@ -32,13 +32,7 @@ int main(int argc, const char* argv[]) {
     Device device = Device(k, h_x, h_y);
 
     const auto start = std::chrono::high_resolution_clock::now();
-    for (size_t iteration = 0; iteration < number_of_iterations; ++iteration) {
-        device.fine_reduce();
-        device.sync();
-        device.coarse_reduce();
-        device.sync();
-    }
-
+    device.run_k_means(number_of_iterations);
     const auto end      = std::chrono::high_resolution_clock::now();
     const auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(end - start);
     std::cerr << "Took: " << duration.count() << "s" << std::endl;
