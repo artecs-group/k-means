@@ -28,10 +28,10 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     // init pad values
     _queue.memset(point_x, 0, point_size_pad * sizeof(float));
     _queue.memset(point_y, 0, point_size_pad * sizeof(float));
-    sync();
+    _sync();
     _queue.memcpy(point_x, h_x.data(), point_bytes);
     _queue.memcpy(point_y, h_y.data(), point_bytes);
-    sync();
+    _sync();
 
     //init means
     std::mt19937 rng(std::random_device{}());
@@ -44,7 +44,7 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     _queue.memset(sum_x, 0, sum_bytes);
     _queue.memset(sum_y, 0, sum_bytes);
     _queue.memset(counts, 0, count_bytes);
-    sync();
+    _sync();
 }
 
 
@@ -110,7 +110,7 @@ std::tuple<int,int,int> Device::_get_group_work_items(int elements) {
 }
 
 
-void Device::sync() {
+void Device::_sync() {
     _queue.wait();
 }
 
@@ -294,7 +294,7 @@ void Device::_coarse_reduce() {
 void Device::save_solution(std::vector<float>& h_mean_x, std::vector<float>& h_mean_y) {
     _queue.memcpy(h_mean_x.data(), mean_x, mean_bytes);
     _queue.memcpy(h_mean_y.data(), mean_y, mean_bytes);
-    sync();
+    _sync();
 }
 
 
