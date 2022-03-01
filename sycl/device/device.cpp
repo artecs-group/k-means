@@ -198,6 +198,8 @@ void Device::_fine_reduce() {
 
 void Device::_middle_reduce() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(groups*k);
+
+    // iterate till we just need one group for the coarse reduction
     while (groups > 1) {
         _queue.submit([&](handler& h) {
             int k = this->k;
@@ -210,24 +212,28 @@ void Device::_middle_reduce() {
 
             h.parallel_for<class middle_reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
                 const int global_index = item.get_global_id(0);
-                const int index = item.get_local_id(0);
-                const int y = item.get_local_id(0) + item.get_local_range(0);
+                const int local_index  = item.get_local_id(0);
+                const int x            = local_index;
+                const int y            = local_index + item.get_local_range(0);
 
-                shared_data[index] = sum_x[global_index];
-                shared_data[y]     = sum_y[global_index];
+                shared_data[x] = sum_x[global_index];
+                shared_data[y] = sum_y[global_index];
                 item.barrier(sycl::access::fence_space::local_space);
 
-                for (int stride = item.get_local_range(0) >> 1; stride >= k; stride >>= 1) {
-                    if (index < stride) {
-                        shared_data[index] += shared_data[index + stride];
-                        shared_data[y]     += shared_data[y + stride];
+                for (int cluster = 0; cluster < k; ++cluster) {
+                    for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
+                        if (local_index < stride) {
+                            shared_data[x] += shared_data[x + stride];
+                            shared_data[y] += shared_data[y + stride];
+                        }
+                        item.barrier(sycl::access::fence_space::local_space);
                     }
-                    item.barrier(sycl::access::fence_space::local_space);
-                }
 
-                if (index < k) {
-                    sum_x[]    = shared_data[x];
-                    sum_y[]    = shared_data[y];
+                    if (local_index == 0) {
+                        const int cluster_index = item.get_group(0) * k + cluster;
+                        sum_x[cluster_index]    = shared_data[x];
+                        sum_y[cluster_index]    = shared_data[y];
+                    }
                 }
             });
         });
@@ -243,11 +249,9 @@ void Device::_coarse_reduce() {
     // UHD630 -> gs = 256, wi = 100096, g = 391; size = 100000
     // UHD630 -> gs = 256, wi = 1792,   g = 7;   size = 4*7 = 1564
     // UHD630 -> gs = 28,  wi = 28,     g = 1;   size = 4*7 = 28
-    std::tie (groups, group_size, work_items) = _get_group_work_items(sum_size);
 
     _queue.submit([&](handler& h) {
         int k = this->k;
-        int sum_s = sum_size;
         int* counts = this->counts;
         float* mean_x = this->mean_x;
         float* mean_y = this->mean_y;
@@ -255,7 +259,7 @@ void Device::_coarse_reduce() {
         float* sum_y = this->sum_y;
 
         // * 2 for x and y. Will have k * blocks threads for the coarse reduction.
-        int s_size = 2 * sum_s * sizeof(float);
+        int s_size = 2 * groups*k * sizeof(float);
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
 
         h.parallel_for<class coarse_reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
