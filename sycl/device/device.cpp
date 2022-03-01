@@ -7,21 +7,30 @@
 Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     _queue = _get_queue();
     
-    point_size  = h_x.size();
-    point_bytes = point_size * sizeof(float);
-    mean_bytes  = k * sizeof(float);
-    sum_size    = k * std::get<0>(_get_group_work_items(point_size));
-    sum_bytes   = sum_size * sizeof(float);
-    count_bytes = sum_bytes * sizeof(int);
+    point_size     = h_x.size();
 
-    point_x = malloc_device<float>(point_bytes, _queue);
-    point_y = malloc_device<float>(point_bytes, _queue);
+    int group_size, work_items, groups;
+    std::tie (groups, group_size, work_items) = _get_group_work_items(point_size);
+
+    point_size_pad = point_size + (work_items - point_size);
+    point_bytes    = point_size * sizeof(float);
+    mean_bytes     = k * sizeof(float);
+    sum_size       = k * groups;
+    sum_bytes      = sum_size * sizeof(float);
+    count_bytes    = sum_bytes * sizeof(int);
+
+    point_x = malloc_device<float>(point_size_pad * sizeof(float), _queue);
+    point_y = malloc_device<float>(point_size_pad * sizeof(float), _queue);
     mean_x  = malloc_device<float>(mean_bytes, _queue);
     mean_y  = malloc_device<float>(mean_bytes, _queue);
     sum_x   = malloc_device<float>(sum_bytes, _queue);
     sum_y   = malloc_device<float>(sum_bytes, _queue);
     counts  = malloc_device<int>(count_bytes, _queue);
 
+    // init pad values
+    _queue.memset(point_x, 0, point_size_pad * sizeof(float));
+    _queue.memset(point_y, 0, point_size_pad * sizeof(float));
+    sync();
     _queue.memcpy(point_x, h_x.data(), point_bytes);
     _queue.memcpy(point_y, h_y.data(), point_bytes);
     sync();
@@ -119,8 +128,6 @@ void Device::fine_reduce() {
             const int global_index = item.get_global_id(0);
 			const int local_index = item.get_local_id(0);
 
-            if (global_index >= point_s) return;
-
             // Load the mean values into shared memory.
             if (local_index < k) {
                 shared_data[local_index] = mean_x[local_index];
@@ -198,11 +205,8 @@ void Device::coarse_reduce() {
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
 
         h.parallel_for<class coarse_reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
-            const int global_index = item.get_global_id(0);
             const int index = item.get_local_id(0);
             const int y = item.get_local_id(0) + item.get_local_range(0);
-
-            if (global_index >= sum_s) return;
 
             shared_data[index] = sum_x[index];
             shared_data[y]     = sum_y[index];

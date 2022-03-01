@@ -13,7 +13,7 @@ else ifeq ($(DEVICE), igpu)
 endif
 
 CC = dpcpp
-CFLAGS = -D$(PDEVICE) -std=c++17 -fsycl -O3 
+CFLAGS = -D$(PDEVICE) -fsycl -O3 
 CLINK = -fsycl-device-code-split=per_kernel
 
 ifeq ($(PDEVICE),NVIDIA_DEVICE)
@@ -31,7 +31,7 @@ main.o: ./device/device.o
 	$(CC) $(CFLAGS) ./device/device.cpp -c -o ./device/device.o
 
 run: main
-	./k_means ../data/100k.csv 4 300 100000
+	./k_means ../data/100k.csv 4 100000 300
 
 .PHONY: clean
 clean:

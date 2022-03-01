@@ -8,7 +8,7 @@ k_means.o: ./k_means.cu
 	$(CC) $(CFLAGS) k_means.cu -c -o k_means.o
 
 run: k_means
-	./k_means ../data/100k.csv 4 300 100000
+	./k_means ../data/100k.csv 4 100000 300
 
 .PHONY: clean
 clean:
