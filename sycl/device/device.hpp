@@ -52,9 +52,9 @@ class Device {
 
         sycl::queue _get_queue();
         void _sync();
-        void _fine_reduce();
-        void _middle_reduce();
-        void _coarse_reduce();
+        void _assign_clusters();
+        void _reduce();
+        void _compute_mean();
         std::tuple<int,int,int> _get_group_work_items(int elements);
 };
 

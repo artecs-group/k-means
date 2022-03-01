@@ -16,8 +16,7 @@ int main(int argc, const char* argv[]) {
     const auto n_points = std::atoi(argv[3]);
     const auto number_of_iterations = (argc == 5) ? std::atoi(argv[4]) : 300;
 
-    std::vector<float> h_x;
-    std::vector<float> h_y;
+    std::vector<float> h_x, h_y;
     std::ifstream stream(argv[1]);
     std::string line;
     for(int i{n_points}; std::getline(stream, line) && i > 0; i--) {
