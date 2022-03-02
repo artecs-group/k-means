@@ -86,17 +86,10 @@ sycl::queue Device::_get_queue() {
 void Device::run_k_means(int iterations) {
     for (size_t i{0}; i < iterations; ++i) {
         _assign_clusters();
-        _sync();
         _reduce();
-        _sync();
         _compute_mean();
-        _sync();
-        // clean last iteration values
-        _queue.memset(sum_x, 0, sum_bytes);
-        _queue.memset(sum_y, 0, sum_bytes);
-        _queue.memset(counts, 0, count_bytes);
-        _sync();
     }
+    _sync();
 }
 
 
@@ -188,8 +181,9 @@ void Device::_reduce() {
     int elements{point_size};
     std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
 
-    while (groups > 1) {
+    while (elements > k) {
         _queue.submit([&](handler& h) {
+            int point_size = this->point_size;
             int group_size = this->group_size;
             int k = this->k;
             int* counts = this->counts;
@@ -204,14 +198,14 @@ void Device::_reduce() {
                 const int global_index = item.get_global_id(0);
                 const int local_index  = item.get_local_id(0);
                 const int x            = local_index;
-                const int y            = local_index + item.get_local_range(0);
-                const int c            = local_index + item.get_local_range(0) + item.get_local_range(0);
+                const int y            = local_index + item.get_local_range(0)*k;
+                const int c            = local_index + item.get_local_range(0)*k + item.get_local_range(0)*k;
 
                 // load by cluster
                 for (int cluster = 0; cluster < k; ++cluster) {
-                    shared_data[group_size * cluster + x] = sum_x[elements * cluster + global_index];
-                    shared_data[group_size * cluster + y] = sum_y[elements * cluster + global_index];
-                    shared_data[group_size * cluster + c] = counts[elements * cluster + global_index];
+                    shared_data[group_size * cluster + x] = sum_x[point_size * cluster + global_index];
+                    shared_data[group_size * cluster + y] = sum_y[point_size * cluster + global_index];
+                    shared_data[group_size * cluster + c] = counts[point_size * cluster + global_index];
                 }
                 item.barrier(sycl::access::fence_space::local_space);
 
@@ -226,8 +220,8 @@ void Device::_reduce() {
                         item.barrier(sycl::access::fence_space::local_space);
                     }
 
-                    if (local_index == 0) {
-                        const int cluster_index  = item.get_group(0) * k + cluster;
+                    if (local_index == 0) {  
+                        const int cluster_index  = point_size * cluster + item.get_group_linear_id();
                         sum_x[cluster_index]     = shared_data[group_size * cluster + x];
                         sum_y[cluster_index]     = shared_data[group_size * cluster + y];
                         counts[cluster_index]    = shared_data[group_size * cluster + c];
@@ -245,7 +239,7 @@ void Device::_reduce() {
 void Device::_compute_mean() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(k);
     _queue.submit([&](handler& h) {
-        int k = this->k;
+        int point_size = this->point_size;
         int* counts = this->counts;
         float* mean_x = this->mean_x;
         float* mean_y = this->mean_y;
@@ -254,9 +248,9 @@ void Device::_compute_mean() {
 
         h.parallel_for<class compute_mean>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
-            const int count        = max(1, counts[global_index]);
-            mean_x[global_index]   = sum_x[global_index] / count;
-            mean_y[global_index]   = sum_y[global_index] / count;
+            const int count        = max(1, counts[point_size * global_index]);
+            mean_x[global_index]   = sum_x[point_size * global_index] / count;
+            mean_y[global_index]   = sum_y[point_size * global_index] / count;
         });
     });
 }
