@@ -182,8 +182,6 @@ void Device::_reduce(float* vec) {
         int point_size = this->point_size;
         int group_size = this->group_size;
         int k = this->k;
-
-        // * 3 for x, y and count. Will have k * blocks threads for the middle reduction.
         int s_size = group_size * k * sizeof(float);
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
 
