@@ -15,7 +15,7 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     mean_bytes     = k * sizeof(float);
     sum_size       = k * point_size;
     sum_bytes      = sum_size * sizeof(float);
-    count_bytes    = sum_size * sizeof(int);
+    count_bytes    = sum_size * sizeof(float);
 
     point_x    = malloc_device<float>(point_size_pad * sizeof(float), _queue);
     point_y    = malloc_device<float>(point_size_pad * sizeof(float), _queue);
@@ -23,7 +23,7 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     mean_y     = malloc_device<float>(mean_bytes, _queue);
     sum_x      = malloc_device<float>(sum_bytes, _queue);
     sum_y      = malloc_device<float>(sum_bytes, _queue);
-    counts     = malloc_device<int>(count_bytes, _queue);
+    counts     = malloc_device<float>(count_bytes, _queue);
     assigments = malloc_device<int>(point_size_pad * sizeof(int), _queue);
 
     // init pad values
@@ -86,7 +86,7 @@ sycl::queue Device::_get_queue() {
 void Device::run_k_means(int iterations) {
     for (size_t i{0}; i < iterations; ++i) {
         _assign_clusters();
-        _reduce();
+        _manage_reduction();
         _compute_mean();
     }
     _sync();
@@ -132,7 +132,7 @@ void Device::_assign_clusters() {
         float* mean_y = this->mean_y;
         float* sum_x = this->sum_x;
         float* sum_y = this->sum_y;
-        int* counts = this->counts;
+        float* counts = this->counts;
         int* assigments = this->assigments;
 
         // * 2 for mean_x and mean_y.
@@ -177,58 +177,54 @@ void Device::_assign_clusters() {
 }
 
 
-void Device::_reduce() {
+void Device::_reduce(float* vec) {
+    _queue.submit([&](handler& h) {
+        int point_size = this->point_size;
+        int group_size = this->group_size;
+        int k = this->k;
+
+        // * 3 for x, y and count. Will have k * blocks threads for the middle reduction.
+        int s_size = group_size * k * sizeof(float);
+        sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
+
+        h.parallel_for<class reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
+            const int global_index = item.get_global_id(0);
+            const int local_index  = item.get_local_id(0);
+            const int x            = local_index;
+
+            // load by cluster
+            for (int cluster = 0; cluster < k; ++cluster)
+                shared_data[group_size * cluster + x] = vec[point_size * cluster + global_index];
+
+            item.barrier(sycl::access::fence_space::local_space);
+
+            // apply reduction
+            for (int cluster = 0; cluster < k; ++cluster) {
+                for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
+                    if (local_index < stride)
+                        shared_data[group_size * cluster + x] += shared_data[group_size * cluster + x + stride];
+
+                    item.barrier(sycl::access::fence_space::local_space);
+                }
+
+                if (local_index == 0) {  
+                    const int cluster_index = point_size * cluster + item.get_group_linear_id();
+                    vec[cluster_index]      = shared_data[group_size * cluster + x];
+                }
+            }
+        });
+    });
+}
+
+
+void Device::_manage_reduction() {
     int elements{point_size};
     std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
 
     while (elements > k) {
-        _queue.submit([&](handler& h) {
-            int point_size = this->point_size;
-            int group_size = this->group_size;
-            int k = this->k;
-            int* counts = this->counts;
-            float* sum_x = this->sum_x;
-            float* sum_y = this->sum_y;
-
-            // * 3 for x, y and count. Will have k * blocks threads for the middle reduction.
-            int s_size = 3 * group_size * k * sizeof(float);
-            sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
-
-            h.parallel_for<class reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
-                const int global_index = item.get_global_id(0);
-                const int local_index  = item.get_local_id(0);
-                const int x            = local_index;
-                const int y            = local_index + item.get_local_range(0)*k;
-                const int c            = local_index + item.get_local_range(0)*k + item.get_local_range(0)*k;
-
-                // load by cluster
-                for (int cluster = 0; cluster < k; ++cluster) {
-                    shared_data[group_size * cluster + x] = sum_x[point_size * cluster + global_index];
-                    shared_data[group_size * cluster + y] = sum_y[point_size * cluster + global_index];
-                    shared_data[group_size * cluster + c] = counts[point_size * cluster + global_index];
-                }
-                item.barrier(sycl::access::fence_space::local_space);
-
-                // apply reduction
-                for (int cluster = 0; cluster < k; ++cluster) {
-                    for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
-                        if (local_index < stride) {
-                            shared_data[group_size * cluster + x] += shared_data[group_size * cluster + x + stride];
-                            shared_data[group_size * cluster + y] += shared_data[group_size * cluster + y + stride];
-                            shared_data[group_size * cluster + c] += shared_data[group_size * cluster + c + stride];
-                        }
-                        item.barrier(sycl::access::fence_space::local_space);
-                    }
-
-                    if (local_index == 0) {  
-                        const int cluster_index  = point_size * cluster + item.get_group_linear_id();
-                        sum_x[cluster_index]     = shared_data[group_size * cluster + x];
-                        sum_y[cluster_index]     = shared_data[group_size * cluster + y];
-                        counts[cluster_index]    = shared_data[group_size * cluster + c];
-                    }
-                }
-            });
-        });
+        _reduce(this->sum_x);
+        _reduce(this->sum_y);
+        _reduce(this->counts);
         _sync();
         elements = groups*k;
         std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
@@ -240,7 +236,7 @@ void Device::_compute_mean() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(k);
     _queue.submit([&](handler& h) {
         int point_size = this->point_size;
-        int* counts = this->counts;
+        float* counts = this->counts;
         float* mean_x = this->mean_x;
         float* mean_y = this->mean_y;
         float* sum_x = this->sum_x;
@@ -248,7 +244,7 @@ void Device::_compute_mean() {
 
         h.parallel_for<class compute_mean>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
-            const int count        = max(1, counts[point_size * global_index]);
+            const int count        = (int)(1 < counts[point_size * global_index]) ? counts[point_size * global_index] : 1;
             mean_x[global_index]   = sum_x[point_size * global_index] / count;
             mean_y[global_index]   = sum_y[point_size * global_index] / count;
         });
