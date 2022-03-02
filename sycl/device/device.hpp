@@ -39,7 +39,7 @@ class IntelGpuSelector : public cl::sycl::device_selector {
 class Device {
     public:
         float *point_x{nullptr}, *point_y{nullptr}, *mean_x{nullptr}, *mean_y{nullptr}, *sum_x{nullptr}, *sum_y{nullptr};
-        int* counts{nullptr};
+        int *counts{nullptr}, *assigments{nullptr};
         int k{0}, point_size{0}, point_bytes{0}, mean_bytes{0}, sum_size{0}, sum_bytes{0}, 
             count_bytes{0}, point_size_pad{0}, group_size{0}, work_items{0}, groups{0};
 

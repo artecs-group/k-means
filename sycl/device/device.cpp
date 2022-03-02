@@ -13,17 +13,18 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     point_size_pad = point_size + (work_items - point_size);
     point_bytes    = point_size * sizeof(float);
     mean_bytes     = k * sizeof(float);
-    sum_size       = k * groups;
+    sum_size       = k * point_size;
     sum_bytes      = sum_size * sizeof(float);
     count_bytes    = sum_size * sizeof(int);
 
-    point_x = malloc_device<float>(point_size_pad * sizeof(float), _queue);
-    point_y = malloc_device<float>(point_size_pad * sizeof(float), _queue);
-    mean_x  = malloc_device<float>(mean_bytes, _queue);
-    mean_y  = malloc_device<float>(mean_bytes, _queue);
-    sum_x   = malloc_device<float>(sum_bytes, _queue);
-    sum_y   = malloc_device<float>(sum_bytes, _queue);
-    counts  = malloc_device<int>(count_bytes, _queue);
+    point_x    = malloc_device<float>(point_size_pad * sizeof(float), _queue);
+    point_y    = malloc_device<float>(point_size_pad * sizeof(float), _queue);
+    mean_x     = malloc_device<float>(mean_bytes, _queue);
+    mean_y     = malloc_device<float>(mean_bytes, _queue);
+    sum_x      = malloc_device<float>(sum_bytes, _queue);
+    sum_y      = malloc_device<float>(sum_bytes, _queue);
+    counts     = malloc_device<int>(count_bytes, _queue);
+    assigments = malloc_device<int>(point_size_pad * sizeof(int), _queue);
 
     // init pad values
     _queue.memset(point_x, 0, point_size_pad * sizeof(float));
@@ -48,18 +49,20 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     _queue.memset(sum_x, 0, sum_bytes);
     _queue.memset(sum_y, 0, sum_bytes);
     _queue.memset(counts, 0, count_bytes);
+    _queue.memset(assigments, 0, point_size_pad * sizeof(int)); // potential bug: try init to -1
     _sync();
 }
 
 
 Device::~Device() {
-	if(point_x != nullptr) free(point_x, _queue);
-	if(point_y != nullptr) free(point_y, _queue);
-	if(mean_x != nullptr) free(mean_x, _queue);
-	if(mean_y != nullptr) free(mean_y, _queue);
-	if(sum_x != nullptr) free(sum_x, _queue);
-	if(sum_y != nullptr) free(sum_y, _queue);
-	if(counts != nullptr) free(counts, _queue);
+	if(point_x != nullptr)    free(point_x, _queue);
+	if(point_y != nullptr)    free(point_y, _queue);
+	if(mean_x != nullptr)     free(mean_x, _queue);
+	if(mean_y != nullptr)     free(mean_y, _queue);
+	if(sum_x != nullptr)      free(sum_x, _queue);
+	if(sum_y != nullptr)      free(sum_y, _queue);
+	if(counts != nullptr)     free(counts, _queue);
+    if(assigments != nullptr) free(assigments, _queue);
 }
 
 
@@ -87,6 +90,11 @@ void Device::run_k_means(int iterations) {
         _reduce();
         _sync();
         _compute_mean();
+        _sync();
+        // clean last iteration values
+        _queue.memset(sum_x, 0, sum_bytes);
+        _queue.memset(sum_y, 0, sum_bytes);
+        _queue.memset(counts, 0, count_bytes);
         _sync();
     }
 }
@@ -123,7 +131,6 @@ void Device::_assign_clusters() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(point_size);
 
     _queue.submit([&](handler& h) {
-        // * 3 for x, y and counts.
         int point_s = this-> point_size;
         int k = this->k;
         float* point_x = this->point_x;
@@ -133,8 +140,10 @@ void Device::_assign_clusters() {
         float* sum_x = this->sum_x;
         float* sum_y = this->sum_y;
         int* counts = this->counts;
+        int* assigments = this->assigments;
 
-        int s_size = 3 * group_size * sizeof(float);
+        // * 2 for mean_x and mean_y.
+        int s_size = 2 * mean_bytes;
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
 
         h.parallel_for<class assign_clusters>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
@@ -163,37 +172,12 @@ void Device::_assign_clusters() {
                     best_cluster = cluster;
                 }
             }
-            item.barrier(sycl::access::fence_space::local_space);
-            
-            // Reduction phase
-            const int x     = local_index;
-            const int y     = local_index + item.get_local_range(0);
-            const int count = local_index + item.get_local_range(0) + item.get_local_range(0);
+            assigments[global_index] = best_cluster;
 
-            for (int cluster = 0; cluster < k; ++cluster) {
-                shared_data[x]     = (best_cluster == cluster) ? x_value : 0;
-                shared_data[y]     = (best_cluster == cluster) ? y_value : 0;
-                shared_data[count] = (best_cluster == cluster) ? 1 : 0;
-                item.barrier(sycl::access::fence_space::local_space);
-
-                // Reduction for this cluster.
-                for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
-                    if (local_index < stride) {
-                        shared_data[x]     += shared_data[x + stride];
-                        shared_data[y]     += shared_data[y + stride];
-                        shared_data[count] += shared_data[count + stride];
-                    }
-                    item.barrier(sycl::access::fence_space::local_space);
-                }
-
-                // Now shared_data[0] holds the sum for x.
-                if (local_index == 0) {
-                    const int cluster_index = item.get_group(0) * k + cluster;
-                    sum_x[cluster_index]    = shared_data[x];
-                    sum_y[cluster_index]    = shared_data[y];
-                    counts[cluster_index]   = shared_data[count];
-                }
-                item.barrier(sycl::access::fence_space::local_space);
+            for(int cluster{0}; cluster < k; cluster++) {
+                sum_x[point_s * cluster + global_index]  = (best_cluster == cluster) ? x_value : 0;
+                sum_y[point_s * cluster + global_index]  = (best_cluster == cluster) ? y_value : 0;
+                counts[point_s * cluster + global_index] = (best_cluster == cluster) ? 1 : 0;
             }
         });
     });
@@ -201,17 +185,19 @@ void Device::_assign_clusters() {
 
 
 void Device::_reduce() {
-    std::tie (groups, group_size, work_items) = _get_group_work_items(groups*k);
+    int elements{point_size};
+    std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
 
     while (groups > 1) {
         _queue.submit([&](handler& h) {
+            int group_size = this->group_size;
             int k = this->k;
             int* counts = this->counts;
             float* sum_x = this->sum_x;
             float* sum_y = this->sum_y;
 
             // * 3 for x, y and count. Will have k * blocks threads for the middle reduction.
-            int s_size = 3 * group_size * sizeof(float);
+            int s_size = 3 * group_size * k * sizeof(float);
             sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
 
             h.parallel_for<class reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
@@ -221,33 +207,38 @@ void Device::_reduce() {
                 const int y            = local_index + item.get_local_range(0);
                 const int c            = local_index + item.get_local_range(0) + item.get_local_range(0);
 
-                shared_data[x] = sum_x[global_index];
-                shared_data[y] = sum_y[global_index];
-                shared_data[c] = counts[global_index];
+                // load by cluster
+                for (int cluster = 0; cluster < k; ++cluster) {
+                    shared_data[group_size * cluster + x] = sum_x[elements * cluster + global_index];
+                    shared_data[group_size * cluster + y] = sum_y[elements * cluster + global_index];
+                    shared_data[group_size * cluster + c] = counts[elements * cluster + global_index];
+                }
                 item.barrier(sycl::access::fence_space::local_space);
 
+                // apply reduction
                 for (int cluster = 0; cluster < k; ++cluster) {
                     for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
                         if (local_index < stride) {
-                            shared_data[x] += shared_data[x + stride];
-                            shared_data[y] += shared_data[y + stride];
-                            shared_data[c] += shared_data[c + stride];
+                            shared_data[group_size * cluster + x] += shared_data[group_size * cluster + x + stride];
+                            shared_data[group_size * cluster + y] += shared_data[group_size * cluster + y + stride];
+                            shared_data[group_size * cluster + c] += shared_data[group_size * cluster + c + stride];
                         }
                         item.barrier(sycl::access::fence_space::local_space);
                     }
 
                     if (local_index == 0) {
                         const int cluster_index  = item.get_group(0) * k + cluster;
-                        sum_x[cluster_index]     = shared_data[x];
-                        sum_y[cluster_index]     = shared_data[y];
-                        counts[cluster_index]    = shared_data[c];
+                        sum_x[cluster_index]     = shared_data[group_size * cluster + x];
+                        sum_y[cluster_index]     = shared_data[group_size * cluster + y];
+                        counts[cluster_index]    = shared_data[group_size * cluster + c];
                     }
                 }
             });
         });
-        std::tie (groups, group_size, work_items) = _get_group_work_items(groups*k);
+        _sync();
+        elements = groups*k;
+        std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
     }
-     
 }
 
 
@@ -266,9 +257,6 @@ void Device::_compute_mean() {
             const int count        = max(1, counts[global_index]);
             mean_x[global_index]   = sum_x[global_index] / count;
             mean_y[global_index]   = sum_y[global_index] / count;
-            sum_x[global_index]    = 0;
-            sum_y[global_index]    = 0;
-            counts[global_index]   = 0;
         });
     });
 }
