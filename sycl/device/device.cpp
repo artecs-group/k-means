@@ -135,20 +135,8 @@ void Device::_assign_clusters() {
         float* counts = this->counts;
         int* assigments = this->assigments;
 
-        // * 2 for mean_x and mean_y.
-        int s_size = 2 * mean_bytes;
-        sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
-
         h.parallel_for<class assign_clusters>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
-			const int local_index = item.get_local_id(0);
-
-            // Load the mean values into shared memory.
-            if (local_index < k) {
-                shared_data[local_index] = mean_x[local_index];
-                shared_data[k + local_index] = mean_y[local_index];
-            }
-            item.barrier(sycl::access::fence_space::local_space);
 
             // Load once here.
             const float x_value = point_x[global_index];
@@ -158,7 +146,7 @@ void Device::_assign_clusters() {
             int best_cluster = -1;
             for (int cluster = 0; cluster < k; ++cluster) {
                 const float distance = 
-                    squared_l2_distance(x_value, y_value, shared_data[cluster], shared_data[k + cluster]);
+                    squared_l2_distance(x_value, y_value, mean_x[cluster], mean_y[cluster]);
                 
                 if (distance < best_distance) {
                     best_distance = distance;
@@ -182,7 +170,7 @@ void Device::_reduce(float* vec) {
         int point_size = this->point_size;
         int group_size = this->group_size;
         int k = this->k;
-        int s_size = group_size * k * sizeof(float);
+        int s_size = group_size * sizeof(float);
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
 
         h.parallel_for<class reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
@@ -190,24 +178,22 @@ void Device::_reduce(float* vec) {
             const int local_index  = item.get_local_id(0);
             const int x            = local_index;
 
-            // load by cluster
-            for (int cluster = 0; cluster < k; ++cluster)
-                shared_data[group_size * cluster + x] = vec[point_size * cluster + global_index];
-
-            item.barrier(sycl::access::fence_space::local_space);
-
-            // apply reduction
             for (int cluster = 0; cluster < k; ++cluster) {
+                // load by cluster
+                shared_data[x] = vec[point_size * cluster + global_index];
+                item.barrier(sycl::access::fence_space::local_space);
+
+                // apply reduction
                 for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
                     if (local_index < stride)
-                        shared_data[group_size * cluster + x] += shared_data[group_size * cluster + x + stride];
+                        shared_data[x] += shared_data[x + stride];
 
                     item.barrier(sycl::access::fence_space::local_space);
                 }
 
                 if (local_index == 0) {  
                     const int cluster_index = point_size * cluster + item.get_group_linear_id();
-                    vec[cluster_index]      = shared_data[group_size * cluster + x];
+                    vec[cluster_index]      = shared_data[x];
                 }
             }
         });
