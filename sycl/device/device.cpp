@@ -106,7 +106,12 @@ void Device::run_k_means(int iterations) {
 
 */
 std::tuple<int,int,int> Device::_get_group_work_items(int elements) {
-    const int max_group  = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
+#if defined(CPU_DEVICE)
+// temporal fix, keeping the whole number crashes the execution
+    const int max_group  = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>() >> 2;
+#else
+	const int max_group  = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
+#endif
     const int group_size = (elements <= max_group) ? elements : max_group;
     const int work_items = (elements <= max_group) ? elements : elements + group_size - (elements % group_size);
     const int groups     = (elements <= max_group) ? 1 : work_items / group_size;
