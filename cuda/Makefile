@@ -1,16 +1,20 @@
 CC = nvcc
-CFLAGS = -std=c++11 -O3
+CFLAGS = -std=c++17 -O3
 
-k_means: k_means.o
-	$(CC) $(CFLAGS) $(CLINK) k_means.o -o k_means
+main: ./device/device.o main.o
+	$(CC) $(CFLAGS) main.o ./device/device.o -o k_means
 
-k_means.o: ./k_means.cu
-	$(CC) $(CFLAGS) k_means.cu -c -o k_means.o
+main.o: ./device/device.o
+	$(CC) $(CFLAGS) main.cu -c -o main.o
 
-run: k_means
+./device/device.o: ./device/device.cuh
+	$(CC) $(CFLAGS) ./device/device.cu -c -o ./device/device.o
+
+run: main
 	./k_means ../data/100k.csv 4 100000 300
 
 .PHONY: clean
 clean:
 	rm -f k_means \
-	*.o
+	*.o \
+	./device/*.o

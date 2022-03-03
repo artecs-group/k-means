@@ -1,4 +1,3 @@
-
 #ifndef _DEVICE_K_MEANS_
 #define _DEVICE_K_MEANS_
 
