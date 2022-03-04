@@ -3,8 +3,8 @@
 #include <string.h>
 #include <math.h>
 
-#include "main.h"
-#include "init.h"
+#include "../main.hpp"
+#include "init.hpp"
 
 
 /*-----------------------------------------------------------------------------------------*/

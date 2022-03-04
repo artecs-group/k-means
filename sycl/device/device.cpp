@@ -4,13 +4,11 @@
 #include <stdlib.h>
 #include <oneapi/mkl.hpp>
 #include <dpct/blas_utils.hpp>
-
-#include <oneapi/mkl.hpp>
 #include <oneapi/mkl/rng/device.hpp>
 
-#include "main.h"
-#include "gpu.h"
-#include "init.h"
+#include "../main.hpp"
+#include "device.hpp"
+#include "../init/init.hpp"
 #include <chrono>
 
 /*-----------------------------------------------------------------------------------------*/
@@ -22,15 +20,12 @@ T_real *GPU_centroidT;   // Array for the transposed matrix of centroids
 T_real *GPU_package;     // Array for the packages used in UpdateCentroids
 int *GPU_label;          // Array for cluster labels of data points
 int *GPU_count;          // Count of data instances in each cluster
-dpct::global_memory<unsigned long long int, 0>
-    GPU_track_sum; // Sum of label changes in two consecutive iterations
-unsigned long long int *AdrGPU_track_sum = NULL;  // Address of GPU_track_sum
+unsigned long long int* GPU_track_sum; // Sum of label changes in two consecutive iterations
 /*
 DPCT1032:0: A different random number generator is used. You may need to adjust
 the code.
 */
-oneapi::mkl::rng::device::philox4x32x10<1>
-    *devStates; // States for using cuRAND library
+oneapi::mkl::rng::device::philox4x32x10<1> *devStates; // States for using cuRAND library
 
 sycl::queue *cublasHandle; // Handle for cuBLAS library
 
@@ -43,7 +38,7 @@ std::chrono::time_point<std::chrono::steady_clock> stop_ct1;
 /*-----------------------------------------------------------------------------------------*/
 /* Init and finalize the GPU device                                                        */
 /*-----------------------------------------------------------------------------------------*/
-void gpuInit(void) try {
+void init(void) try {
     dpct::device_ext &dev_ct1 = dpct::get_current_device();
     sycl::queue &q_ct1 = dev_ct1.default_queue();
     /*
@@ -112,13 +107,8 @@ void gpuInit(void) try {
                  oneapi::mkl::rng::device::philox4x32x10<1>>(NbClusters, q_ct1),
              0),
             "Dynamic allocation for devStates");
-    /*
-    DPCT1003:10: Migrated API does not return error code. (*, 0) is inserted.
-    You may need to rewrite this code.
-    */
-    CHECK_CUDA_SUCCESS(
-        (*((void **)&AdrGPU_track_sum) = GPU_track_sum.get_ptr(), 0),
-        "Get the address of GPU_track_sum");
+
+    GPU_track_sum = sycl::malloc_device<unsigned long long int>(1, q_ct1);
 
     // Turn CPU arrays dataT, centroid and label into "pinned" memory areas
     /*
@@ -172,7 +162,7 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-void gpuFinalize(void) try {
+void finish(void) try {
     dpct::device_ext &dev_ct1 = dpct::get_current_device();
     sycl::queue &q_ct1 = dev_ct1.default_queue();
     // Free dynamic allocations on GPU
@@ -273,7 +263,7 @@ catch (sycl::exception const &exc) {
 /*-----------------------------------------------------------------------------------------*/
 /* Transfer of CPU input data into GPU symbols                                             */
 /*-----------------------------------------------------------------------------------------*/
-void gpuSetDataOnGPU(void) try {
+void set_data_device(void) try {
     dpct::device_ext &dev_ct1 = dpct::get_current_device();
     sycl::queue &q_ct1 = dev_ct1.default_queue();
     /*
@@ -307,7 +297,7 @@ catch (sycl::exception const &exc) {
 /*-----------------------------------------------------------------------------------------*/
 /* Transfer of GPU results into CPU array                                                  */
 /*-----------------------------------------------------------------------------------------*/
-void gpuGetResultOnCPU(void) try {
+void get_result_host(void) try {
     dpct::device_ext &dev_ct1 = dpct::get_current_device();
     sycl::queue &q_ct1 = dev_ct1.default_queue();
     /*
@@ -747,7 +737,7 @@ void UpdateCentroids_Step2_Parent(T_real *GPU_package, T_real *GPU_centroidT, in
 /*-----------------------------------------------------------------------------------------*/
 /* K-means clustering on the GPU                                                           */
 /*-----------------------------------------------------------------------------------------*/
-void gpuKmeans(void) try {
+void run_k_means(void) try {
     dpct::device_ext &dev_ct1 = dpct::get_current_device();
     sycl::queue &q_ct1 = dev_ct1.default_queue();
     sycl::range<3> Dg(1, 1, 1), Db(1, 1, 1);
