@@ -3,7 +3,6 @@
 #include <stdexcept>
 #include <string>
 #include <stdio.h>
-#include <random>
 #include "oneapi/dal.hpp"
 #include <CL/sycl.hpp>
 

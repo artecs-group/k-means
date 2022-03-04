@@ -1,3 +1,4 @@
 *.o
 .vscode/
 k_means
+__pycache__
