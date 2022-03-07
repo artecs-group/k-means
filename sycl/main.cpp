@@ -23,36 +23,26 @@ int main(int argc, char *argv[])
     // Initialisations
     tb_application = std::chrono::high_resolution_clock::now();
     CommandLineParsing(argc,argv);
-    omp_set_num_threads(NbThreads);
     PrintConfig();
-
     // Load input dataset
     fprintf(stdout,"- Loading data from text file into CPU RAM...\n");
     tb_input = std::chrono::high_resolution_clock::now();
     InputDataset();
     tf_input = std::chrono::high_resolution_clock::now();	
-
     fprintf(stdout,"- Parallel computation starts...\n");
-
-    if (OnGPUFlag)
-        gpuInit();       // Init the GPU device
-
-    // Run computation on the GPU or on the CPU
+    device_init();       // Init the device
+    // Run computation 
     tb_transfer_computation = std::chrono::high_resolution_clock::now();
-    gpuSetDataOnGPU();
+    set_data_device();
     tb_computation = std::chrono::high_resolution_clock::now();
-    gpuKmeans();
+    run_k_means();
     tf_computation = std::chrono::high_resolution_clock::now();
-    gpuGetResultOnCPU();
+    get_result_host();
     tf_transfer_computation = std::chrono::high_resolution_clock::now();
-
-    if (OnGPUFlag)
-        gpuFinalize();   // Finalize GPU device usage
-
+    device_finish();
     tb_output = std::chrono::high_resolution_clock::now();
     OutputResult();
     tf_output = std::chrono::high_resolution_clock::now();
-
     tf_application = std::chrono::high_resolution_clock::now();
 
     // Calculate the elapsed time
