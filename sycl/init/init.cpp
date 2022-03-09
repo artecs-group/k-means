@@ -74,7 +74,7 @@ void InputDataset(void)
 
 
     // Load initial centroids from a text file
-    if (INPUT_INITIAL_CENTROIDS != "") {
+    if (strcmp(INPUT_INITIAL_CENTROIDS, "") != 0) {
         fp = fopen(INPUT_INITIAL_CENTROIDS, "r");
         if (fp == NULL) {
             printf("    Fail to open inital centroids file!\n");
@@ -320,7 +320,7 @@ void PrintResultsAndPerf(void)
     //fprintf(stdout,"    Time of loading input data:               %f s\n", (float) Ts_input);
     if (OnGPUFlag)
         fprintf(stdout,"    Time of data transfers:                   %f ms\n", (float) Ts_transfer*1E3);
-    if (INPUT_INITIAL_CENTROIDS == "")
+    if (strcmp(INPUT_INITIAL_CENTROIDS, "") == 0)
         fprintf(stdout,"    Time of initializing centroids:           %f ms\n", Tms_init);
     if (OnGPUFlag)
         fprintf(stdout,"    Time of transposing centroid matrix:      %f ms\n", Tms_transpose);

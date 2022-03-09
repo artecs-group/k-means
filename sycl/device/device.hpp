@@ -1,9 +1,16 @@
 #include <CL/sycl.hpp>
-#include <dpct/dpct.hpp>
+#include <oneapi/mkl.hpp>
 #include <stdio.h>
 #include <stdlib.h>
 
 using namespace cl::sycl;
+
+#ifdef DP
+#define BLAS_GEAM   cublasDgeam
+#else
+#define BLAS_GEAM   cublasSgeam
+#endif
+
 
 // CUDA GPU selector
 class CudaGpuSelector : public cl::sycl::device_selector {
