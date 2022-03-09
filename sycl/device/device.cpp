@@ -1,10 +1,9 @@
-#include <CL/sycl.hpp>
-#include <dpct/dpct.hpp>
 #include <stdio.h>
 #include <stdlib.h>
 #include <chrono>
+#include <CL/sycl.hpp>
+#include <dpct/dpct.hpp>
 #include <oneapi/mkl.hpp>
-#include <dpct/blas_utils.hpp>
 #include <oneapi/mkl/rng/device.hpp>
 
 #include "../main.hpp"
@@ -22,8 +21,7 @@ int *GPU_label;          // Array for cluster labels of data points
 int *GPU_count;          // Count of data instances in each cluster
 unsigned long long int* GPU_track_sum; // Sum of label changes in two consecutive iterations
 
-oneapi::mkl::rng::device::philox4x32x10<1> *devStates; // States for using cuRAND library
-sycl::queue queue;
+sycl::queue dqueue;
 std::chrono::time_point<std::chrono::steady_clock> start, stop;
 
 
@@ -38,14 +36,14 @@ sycl::queue get_queue() {
 	default_selector selector{};
 #endif
 
-	sycl::queue queue{selector};
-	std::cout << "Running on " << queue.get_device().get_info<sycl::info::device::name>() << std::endl;
-    return queue;
+	sycl::queue dqueue{selector};
+	std::cout << "Running on " << dqueue.get_device().get_info<sycl::info::device::name>() << std::endl;
+    return dqueue;
 }
 
 
 void device_sync(){
-    queue.wait();
+    dqueue.wait();
 }
 
 
@@ -53,17 +51,16 @@ void device_sync(){
 /* Init and finalize the GPU device                                                        */
 /*-----------------------------------------------------------------------------------------*/
 void device_init(void) try {
-    queue = get_queue();
+    dqueue = get_queue();
 
     // Allocate memory space for the dynamic arrays
-    GPU_dataT     = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbPoints, queue);
-    GPU_centroid  = (T_real *)sycl::malloc_device(sizeof(T_real) * NbClusters * NbDims, queue);
-    GPU_centroidT = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbClusters, queue);
-    GPU_package   = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbClusters * NbPackages, queue);
-    GPU_label     = sycl::malloc_device<int>(NbPoints, queue);
-    GPU_count     = sycl::malloc_device<int>(NbClusters, queue);
-    devStates     = sycl::malloc_device<oneapi::mkl::rng::device::philox4x32x10<1>>(NbClusters, queue);
-    GPU_track_sum = sycl::malloc_device<unsigned long long int>(1, queue);
+    GPU_dataT     = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbPoints, dqueue);
+    GPU_centroid  = (T_real *)sycl::malloc_device(sizeof(T_real) * NbClusters * NbDims, dqueue);
+    GPU_centroidT = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbClusters, dqueue);
+    GPU_package   = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbClusters * NbPackages, dqueue);
+    GPU_label     = sycl::malloc_device<int>(NbPoints, dqueue);
+    GPU_count     = sycl::malloc_device<int>(NbClusters, dqueue);
+    GPU_track_sum = sycl::malloc_device<unsigned long long int>(1, dqueue);
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -74,13 +71,12 @@ catch (sycl::exception const &exc) {
 
 void device_finish(void) try {
     // Free dynamic allocations
-    sycl::free(GPU_dataT, queue);
-    sycl::free(GPU_centroid, queue);
-    sycl::free(GPU_centroidT, queue);
-    sycl::free(GPU_package, queue);
-    sycl::free(GPU_label, queue);
-    sycl::free(GPU_count, queue);
-    sycl::free(devStates, queue);
+    sycl::free(GPU_dataT, dqueue);
+    sycl::free(GPU_centroid, dqueue);
+    sycl::free(GPU_centroidT, dqueue);
+    sycl::free(GPU_package, dqueue);
+    sycl::free(GPU_label, dqueue);
+    sycl::free(GPU_count, dqueue);
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -93,9 +89,9 @@ catch (sycl::exception const &exc) {
 /* Transfer of CPU input data into GPU symbols                                             */
 /*-----------------------------------------------------------------------------------------*/
 void set_data_device(void) try {
-    queue.memcpy(GPU_dataT, dataT, sizeof(T_real) * NbDims * NbPoints);
+    dqueue.memcpy(GPU_dataT, dataT, sizeof(T_real) * NbDims * NbPoints);
     if (strcmp(INPUT_INITIAL_CENTROIDS, "") != 0)
-        queue.memcpy(GPU_centroid, centroid, sizeof(T_real) * NbClusters * NbDims);
+        dqueue.memcpy(GPU_centroid, centroid, sizeof(T_real) * NbClusters * NbDims);
     
     device_sync();
 }
@@ -110,8 +106,8 @@ catch (sycl::exception const &exc) {
 /* Transfer of GPU results into CPU array                                                  */
 /*-----------------------------------------------------------------------------------------*/
 void get_result_host(void) try {
-    queue.memcpy(label, GPU_label, sizeof(int) * NbPoints);
-    queue.memcpy(centroid, GPU_centroid, sizeof(T_real) * NbClusters * NbDims);
+    dqueue.memcpy(label, GPU_label, sizeof(int) * NbPoints);
+    dqueue.memcpy(centroid, GPU_centroid, sizeof(T_real) * NbClusters * NbDims);
     device_sync();
 }
 catch (sycl::exception const &exc) {
@@ -124,27 +120,15 @@ catch (sycl::exception const &exc) {
 /*-----------------------------------------------------------------------------------------*/
 /* Select initial centroids                                                                */
 /*-----------------------------------------------------------------------------------------*/
-void SetupcuRand(oneapi::mkl::rng::device::philox4x32x10<1> *state,
-                 sycl::nd_item<3> item)
+
+void InitializeCentroids(T_real *GPU_centroidT, T_real *GPU_dataT, sycl::nd_item<3> item)
 {
     int col = item.get_global_id(2);
-
-    if (col < NbClusters)
-        state[col] = oneapi::mkl::rng::device::philox4x32x10<1>(
-            0, {0, static_cast<std::uint64_t>(col * 8)});
-}
-
-
-void InitializeCentroids(oneapi::mkl::rng::device::philox4x32x10<1> *state,
-                         T_real *GPU_centroidT, T_real *GPU_dataT,
-                         sycl::nd_item<3> item)
-{
-    int col = item.get_global_id(2);
+    oneapi::mkl::rng::device::philox4x32x10<1> engine{};
+    oneapi::mkl::rng::device::uniform<int> dist(0, NbPoints-1);
 
     if (col < NbClusters) {
-        oneapi::mkl::rng::device::uniform<float> distr_ct1;
-        oneapi::mkl::rng::device::philox4x32x10<1> localState = state[col];
-        int idx = (sycl::ceil(NbPoints * curand_uniform(&localState))) - 1; // Control idx in [0, NbPoints - 1]
+        int idx = oneapi::mkl::rng::device::generate(dist, engine);
         for (int j = 0; j < NbDims; j++)
             GPU_centroidT[j*NbClusters + col] = GPU_dataT[j*NbPoints + idx];
     }
@@ -155,8 +139,7 @@ void InitializeCentroids(oneapi::mkl::rng::device::philox4x32x10<1> *state,
 /* Compute point-centroid distances and assign each point to a cluter                      */
 /*-----------------------------------------------------------------------------------------*/
 void ComputeAssign(T_real *GPU_dataT, T_real *GPU_centroid, int *GPU_label, unsigned long long int *GPU_track_sum,
-    sycl::nd_item<3> item, 
-    sycl::accessor<unsigned long long int, 1, sycl::access_mode::read_write, sycl::access::target::local> shTrack)
+    sycl::nd_item<3> item, local_ptr<unsigned long long> shTrack)
 {
     int local_idx = item.get_local_id(2);
     int idx = item.get_group(0) * BSXN + item.get_local_id(2);
@@ -279,9 +262,7 @@ void ComputeAssign(T_real *GPU_dataT, T_real *GPU_centroid, int *GPU_label, unsi
 /* Update centroids												                           */
 /*-----------------------------------------------------------------------------------------*/
 void UpdateCentroids_Step1_Child(int pid, int offset, int length, int *GPU_label, T_real *GPU_package, 
-    T_real *GPU_dataT, int *GPU_count, sycl::nd_item<3> item,
-    sycl::accessor<T_real, 2, sycl::access_mode::read_write, sycl::access::target::local> shTabV,
-    int *shTabL)
+    T_real *GPU_dataT, int *GPU_count, sycl::nd_item<3> item, local_ptr<T_real> shTabV, local_ptr<int> shTabL)
 {
     // Index initialization
     int baseRow = item.get_group(1) * BSYD;   // Base row of the block
@@ -292,7 +273,7 @@ void UpdateCentroids_Step1_Child(int pid, int offset, int length, int *GPU_label
 
     // Load the values and cluster labels of instances into sh mem tables
     if (col < (offset + length) && row < NbDims) {
-        shTabV[item.get_local_id(1)][item.get_local_id(2)] = GPU_dataT[row * NbPoints + col];
+        shTabV[item.get_local_id(1)*BSYD + item.get_local_id(2)] = GPU_dataT[row * NbPoints + col];
         if (item.get_local_id(1) == 0)
             shTabL[item.get_local_id(2)] = GPU_label[col];
     }
@@ -312,7 +293,7 @@ void UpdateCentroids_Step1_Child(int pid, int offset, int length, int *GPU_label
             if (shTabL[x] == cltIdx) { 
                 count++;
                 for (int y = 0; y < BSYD && (baseRow + y) < NbDims; y++)
-                    Sv[y] += shTabV[y][x];
+                    Sv[y] += shTabV[y*BSYD + x];
             }
         }
 
@@ -330,21 +311,17 @@ void UpdateCentroids_Step1_Child(int pid, int offset, int length, int *GPU_label
 
 
 void UpdateCentroids_Step1_Parent(int *GPU_label, T_real *GPU_package, T_real *GPU_dataT, int *GPU_count,
-    sycl::nd_item<3> item,
-    sycl::accessor<T_real, 2, sycl::access_mode::read_write, sycl::access::target::local> shTabV,
-    int *shTabL)
+    sycl::nd_item<3> item, local_ptr<T_real> shTabV, local_ptr<int> shTabL)
 {
-    dpct::device_ext &dev = queue.get_device();
+    dpct::device_ext &dev = dpct::get_current_device();
     int tid = item.get_local_id(2); // Thread id
 
     if (tid < NbPackages) {
         int offset, length, quotient, remainder;
         int np = NbPackages/nStreams1 + (NbPackages%nStreams1 > 0 ? 1 : 0);  // Nb of packages for each stream
         int pid;                        // Id of package
-        sycl::queue *stream;
+        sycl::queue *stream = dev.create_queue();
         sycl::range<3> Dg(1, 1, 1), Db(1, 1, 1);
-
-        stream = dev.create_queue();
 
         quotient  = NbPoints / NbPackages;
         remainder = NbPoints % NbPackages;
@@ -374,7 +351,7 @@ void UpdateCentroids_Step1_Parent(int *GPU_label, T_real *GPU_package, T_real *G
                         UpdateCentroids_Step1_Child(
                             pid, offset, length, GPU_label,
                             GPU_package, GPU_dataT, GPU_count,
-                            item, shTabV_acc,
+                            item, shTabV_acc.get_pointer(),
                             shTabL_acc.get_pointer());
                     });
                 });
@@ -401,15 +378,14 @@ void UpdateCentroids_Step2_Child(int pid, T_real *GPU_package, T_real *GPU_centr
 void UpdateCentroids_Step2_Parent(T_real *GPU_package, T_real *GPU_centroidT, int *GPU_count, 
     sycl::nd_item<3> item)
 {
-    dpct::device_ext &dev = queue.get_device();
+    dpct::device_ext &dev = dpct::get_current_device();
     int tid = item.get_local_id(2);
 
     if (tid < NbPackages) {
         int np = NbPackages/nStreams2 + (NbPackages % nStreams2 > 0 ? 1 : 0); // Nb of packages for each stream
         int pid;   // Id of package
-        sycl::queue *stream;
+        sycl::queue *stream = dev.create_queue();
         sycl::range<3> Dg(1, 1, 1), Db(1, 1, 1);
-        stream = dev.create_queue();
 
         Db[2] = BSXK;
         Db[1] = 1;
@@ -454,8 +430,8 @@ void run_k_means(void) try {
 
         // Get GPU_centroidT by transposing GPU_centroid
         start = std::chrono::steady_clock::now();
-        BLAS_GEAM(queue, trans, nontrans, NbClusters, NbDims, &alpha, GPU_centroid,
-                NbDims, &beta, NULL, NbClusters, GPU_centroidT, NbClusters);
+        oneapi::mkl::blas::gemm(dqueue, trans, nontrans, NbClusters, NbDims, NbDims, alpha, GPU_centroid,
+                NbDims, NULL, NbClusters, beta, GPU_centroidT, NbClusters);
         
         device_sync();
         stop = std::chrono::steady_clock::now();
@@ -472,22 +448,13 @@ void run_k_means(void) try {
         Dg[0] = 1;
 
         start = std::chrono::steady_clock::now();
-        queue.submit([&](sycl::handler &cgh) {
-            auto devStates_ct0 = devStates;
-
-            cgh.parallel_for(sycl::nd_range<3>(Dg * Db, Db), [=](sycl::nd_item<3> item) {
-                SetupcuRand(devStates_ct0, item);
-            });
-        });
-
-        queue.submit([&](sycl::handler &cgh) {
-            auto devStates_ct0 = devStates;
+        dqueue.submit([&](sycl::handler &cgh) {
             auto GPU_centroidT_ct1 = GPU_centroidT;
             auto GPU_dataT_ct2 = GPU_dataT;
 
             cgh.parallel_for(
                 sycl::nd_range<3>(Dg * Db, Db), [=](sycl::nd_item<3> item) {
-                    InitializeCentroids(devStates_ct0, GPU_centroidT_ct1, GPU_dataT_ct2, item);
+                    InitializeCentroids(GPU_centroidT_ct1, GPU_dataT_ct2, item);
                 });
         });
         device_sync();
@@ -500,8 +467,8 @@ void run_k_means(void) try {
         beta = 0.0f;
 
         start = std::chrono::steady_clock::now();
-        BLAS_GEAM(queue, trans, nontrans, NbDims, NbClusters, &alpha, GPU_centroidT,
-                NbClusters, &beta, NULL, NbDims, GPU_centroid, NbDims);
+        oneapi::mkl::blas::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
+                NbClusters, NULL, NbDims, beta, GPU_centroid, NbDims);
         device_sync();
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
@@ -518,17 +485,20 @@ void run_k_means(void) try {
         Dg[0] = 1;
 
         start = std::chrono::steady_clock::now();
-        queue.memset(GPU_track_sum, 0, sizeof(unsigned long long int) * 1);
+        dqueue.memset(GPU_track_sum, 0, sizeof(unsigned long long int) * 1);
         device_sync();
 
-        queue.submit([&](sycl::handler &cgh) {
+        dqueue.submit([&](sycl::handler &cgh) {
+            auto GPU_dataT_d = GPU_dataT;
+            auto GPU_centroid_d = GPU_centroid;
+            auto GPU_label_d = GPU_label;
+            auto GPU_track_sum_d = GPU_track_sum;
             sycl::accessor<unsigned long long int, 1, sycl::access_mode::read_write, sycl::access::target::local> shTrack(sycl::range<1>(BSXN), cgh);
             cgh.parallel_for(sycl::nd_range<3>(Dg * Db, Db), [=](sycl::nd_item<3> item) {
-                    ComputeAssign(GPU_dataT GPU_centroid, GPU_label,
-                        GPU_track_sum, item, shTrack.get_pointer());
+                    ComputeAssign(GPU_dataT_d, GPU_centroid_d, GPU_label_d, GPU_track_sum_d, item, shTrack.get_pointer());
                 });
         });
-        queue.memcpy(&track, GPU_track_sum, sizeof(unsigned long long int) * 1);
+        dqueue.memcpy(&track, GPU_track_sum, sizeof(unsigned long long int) * 1);
         device_sync();
 
         stop = std::chrono::steady_clock::now();
@@ -537,12 +507,12 @@ void run_k_means(void) try {
 
         // Update centroids - Step1
         start = std::chrono::steady_clock::now();
-        queue.memset(GPU_count, 0, sizeof(int) * NbClusters);
-        queue.memset(GPU_package, 0, sizeof(T_real) * NbDims * NbClusters * NbPackages);
-        queue.memset(GPU_centroidT, 0, sizeof(T_real) * NbDims * NbClusters);
+        dqueue.memset(GPU_count, 0, sizeof(int) * NbClusters);
+        dqueue.memset(GPU_package, 0, sizeof(T_real) * NbDims * NbClusters * NbPackages);
+        dqueue.memset(GPU_centroidT, 0, sizeof(T_real) * NbDims * NbClusters);
         device_sync();
 
-        queue.submit([&](sycl::handler &cgh) {
+        dqueue.submit([&](sycl::handler &cgh) {
             sycl::accessor<T_real, 2, sycl::access_mode::read_write, sycl::access::target::local>
                 shTabV_acc(sycl::range<2>(BSYD, BSXP), cgh);
 
@@ -559,7 +529,7 @@ void run_k_means(void) try {
                     UpdateCentroids_Step1_Parent(
                         GPU_label_ct0, GPU_package_ct1,
                         GPU_dataT_ct2, GPU_count_ct3, item,
-                        shTabV_acc,
+                        shTabV_acc.get_pointer(),
                         shTabL_acc.get_pointer());
             });
         });
@@ -574,7 +544,7 @@ void run_k_means(void) try {
         beta = 0.0f;
 
         start = std::chrono::steady_clock::now();
-        queue.submit([&](sycl::handler &cgh) {
+        dqueue.submit([&](sycl::handler &cgh) {
             auto GPU_package_ct0 = GPU_package;
             auto GPU_centroidT_ct1 = GPU_centroidT;
             auto GPU_count_ct2 = GPU_count;
@@ -584,8 +554,8 @@ void run_k_means(void) try {
                     UpdateCentroids_Step2_Parent(GPU_package_ct0, GPU_centroidT_ct1, GPU_count_ct2, item);
             });
         });
-        BLAS_GEAM(queue, trans, nontrans, NbDims, NbClusters, &alpha, GPU_centroidT,
-                NbClusters, &beta, NULL, NbDims, GPU_centroid, NbDims);
+        oneapi::mkl::blas::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
+                NbClusters, NULL, NbDims, beta, GPU_centroid, NbDims);
         device_sync();
 
         stop = std::chrono::steady_clock::now();

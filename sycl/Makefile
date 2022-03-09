@@ -38,4 +38,4 @@ all:
 	$(CC) -o $(EXECNAME) $(CLINK) $(OBJECTS)
 
 clean:
-	rm -f *.o $(EXECNAME) *.linkinfo *~ *.bak .depend init/*.o device/*.o
+	rm -f *.o $(EXECNAME) *.linkinfo *~ *.bak .depend

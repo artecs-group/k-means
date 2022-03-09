@@ -5,13 +5,6 @@
 
 using namespace cl::sycl;
 
-#ifdef DP
-#define BLAS_GEAM   cublasDgeam
-#else
-#define BLAS_GEAM   cublasSgeam
-#endif
-
-
 // CUDA GPU selector
 class CudaGpuSelector : public cl::sycl::device_selector {
     public:
