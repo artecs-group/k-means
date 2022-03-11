@@ -363,7 +363,7 @@ void UpdateCentroids_Step1_Parent(int *GPU_label, T_real *GPU_package, T_real *G
 
 
 void UpdateCentroids_Step2_Child(int pid, T_real *GPU_package, T_real *GPU_centroidT, int *GPU_count,
-    sycl::nd_item<3> item)
+    sycl::h_item<1> item)
 {
     int rowC = item.get_group(1); // Row of child thread
     int colC = item.get_group(2) * BSXK + item.get_local_id(2); // Col of child thread
@@ -376,33 +376,38 @@ void UpdateCentroids_Step2_Child(int pid, T_real *GPU_package, T_real *GPU_centr
 
 
 void UpdateCentroids_Step2_Parent(T_real *GPU_package, T_real *GPU_centroidT, int *GPU_count, 
-    sycl::nd_item<3> item)
+    sycl::queue dqueue)
 {
-    dpct::device_ext &dev = dpct::get_current_device();
-    int tid = item.get_local_id(2);
+    sycl::range<2> num_groups{nStreams2, };
 
-    if (tid < NbPackages) {
-        int np = NbPackages/nStreams2 + (NbPackages % nStreams2 > 0 ? 1 : 0); // Nb of packages for each stream
-        int pid;   // Id of package
-        sycl::queue *stream = dev.create_queue();
-        sycl::range<3> Dg(1, 1, 1), Db(1, 1, 1);
+    dqueue.submit([&](sycl::handler &h) {
+        h.parallel_for_work_group(num_groups, [=](sycl::group<2> grp) {
+            int tid = grp.get_id(0);
 
-        Db[2] = BSXK;
-        Db[1] = 1;
-        Db[0] = 1;
-        Dg[2] = NbClusters / BSXK + (NbClusters % BSXK > 0 ? 1 : 0);
-        Dg[1] = NbDims;
-        Dg[0] = 1;
+            if (tid < NbPackages) {
+                // Nb of packages for each stream
+                int np = NbPackages/nStreams2 + (NbPackages % nStreams2 > 0 ? 1 : 0);
+                int pid;   // package ID
+                sycl::range<1> group_size{BSXK};
+                sycl::range<3> Dg(1, 1, 1), Db(1, 1, 1);
 
-        for (int i = 0; i < np; i++) {
-            pid = i*nStreams2 + tid;   // Calculate the id of package
-            if (pid < NbPackages)
-                stream->parallel_for(sycl::nd_range<3>(Dg * Db, Db), [=](sycl::nd_item<3> item) {
-                    UpdateCentroids_Step2_Child(pid, GPU_package, GPU_centroidT, GPU_count, item);
-                });
-        }
-        dev.destroy_queue(stream);
-    }
+                Db[2] = BSXK;
+                Db[1] = 1;
+                Db[0] = 1;
+                Dg[2] = NbClusters / BSXK + (NbClusters % BSXK > 0 ? 1 : 0);
+                Dg[1] = NbDims;
+                Dg[0] = 1;
+
+                for (int i = 0; i < np; i++) {
+                    pid = i*nStreams2 + tid;   // Calculate the id of package
+                    if (pid < NbPackages)
+                        grp.parallel_for_work_item(group_size, [&](h_item<1> it) {
+                            UpdateCentroids_Step2_Child(pid, GPU_package, GPU_centroidT, GPU_count, item);
+                        });
+                }
+            }     
+        });
+    });
 }
 
 
@@ -544,16 +549,8 @@ void run_k_means(void) try {
         beta = 0.0f;
 
         start = std::chrono::steady_clock::now();
-        dqueue.submit([&](sycl::handler &cgh) {
-            auto GPU_package_ct0 = GPU_package;
-            auto GPU_centroidT_ct1 = GPU_centroidT;
-            auto GPU_count_ct2 = GPU_count;
+        UpdateCentroids_Step2_Parent(GPU_package, GPU_centroidT, GPU_count, dqueue);
 
-            cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nStreams2),
-                sycl::range<3>(1, 1, nStreams2)), [=](sycl::nd_item<3> item) {
-                    UpdateCentroids_Step2_Parent(GPU_package_ct0, GPU_centroidT_ct1, GPU_count_ct2, item);
-            });
-        });
         oneapi::mkl::blas::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
                 NbClusters, NULL, NbDims, beta, GPU_centroid, NbDims);
         device_sync();
