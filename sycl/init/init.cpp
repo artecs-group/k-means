@@ -195,37 +195,7 @@ void CommandLineParsing(int argc, char *argv[])
     // Init from the command line
     argc--; argv++;
     while (argc > 0) {
-        if (strcmp(argv[0],"-t") == 0) {
-            argc--; argv++;
-            if (argc > 0) {
-                if (strcmp(argv[0],"GPU") == 0) {
-                    OnGPUFlag = 1;
-                    argc--; argv++;
-                } else if (strcmp(argv[0],"CPU") == 0) {
-                    OnGPUFlag = 0;
-                    argc--; argv++;
-                } else {
-                    fprintf(stderr,"Error: unknown computation target '%s'!\n",argv[0]);
-                    exit(EXIT_FAILURE);
-                }
-            } else {
-                usage(EXIT_FAILURE, stderr);
-            }
-
-        } else if (strcmp(argv[0],"-cpu-nt") == 0) {
-            argc--; argv++;
-            if (argc > 0) {
-                NbThreads = atoi(argv[0]);
-                argc--; argv++;
-                if (NbThreads <= 0) {
-                    fprintf(stderr,"Error: number of thread has to be >= 1!\n");
-                    exit(EXIT_FAILURE);
-                }
-            } else {
-                usage(EXIT_FAILURE, stderr);
-            }
-
-        } else if (strcmp(argv[0],"-max-iters") == 0) {
+        if (strcmp(argv[0],"-max-iters") == 0) {
             argc--; argv++;
             if (argc > 0) {
                 MaxNbIters = atoi(argv[0]);

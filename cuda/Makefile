@@ -31,6 +31,7 @@ all:
 	$(GPUCC) -dlink $(CXXFLAGS) $(CUDA_CXXFLAGS) $(CUDA_OBJECTS) -o __gpu_rdc.o -lcudadevrt
 	$(CPUCC) -o $(EXECNAME) $(CC_LDFLAGS) $(CUDA_LDFLAGS) $(CUDA_OBJECTS) __gpu_rdc.o $(CC_OBJECTS) $(CUDA_LIBS) $(CC_LIBS)
 
+.PHONY: clean
 clean:
 	rm -f *.o $(EXECNAME) *.linkinfo *~ *.bak .depend
 
