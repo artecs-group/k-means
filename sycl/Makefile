@@ -24,7 +24,7 @@ CFLAGS = -O3 -D$(PDEVICE) -D$(PREAL) -qmkl -DMKL_ILP64 -I"${MKLROOT}/include"
 CLINK = -fsycl-device-code-split=per_kernel  ${MKLROOT}/lib/intel64/libmkl_sycl.a -Wl,-export-dynamic -Wl,--start-group ${MKLROOT}/lib/intel64/libmkl_intel_ilp64.a ${MKLROOT}/lib/intel64/libmkl_tbb_thread.a ${MKLROOT}/lib/intel64/libmkl_core.a -Wl,--end-group -L${TBBROOT}/lib/intel64/gcc4.8 -ltbb -lsycl -lOpenCL -lpthread -lm -ldl
 
 ifeq ($(DEVICE),nvidia)
-  ONEAPI_DIR=/media/user/b8e12bed-ceff-42c2-a0fb-4c1f513c13c6/oneAPI
+  ONEAPI_DIR=/media/youss/oneapi
   DPCT_INCLUDE_DIR = $(ONEAPI_DIR)/dpcpp-ct/latest/include/
   DPCPP = clang++
   CFLAGS = -D$(PDEVICE) -D$(PREAL) -fsycl -fsycl-targets=nvptx64-nvidia-cuda -I${ONEMKL}/include -I$(DPCT_INCLUDE_DIR)

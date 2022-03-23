@@ -4,7 +4,7 @@
 #include <CL/sycl.hpp>
 #include <dpct/dpct.hpp>
 #include <oneapi/mkl.hpp>
-#include <oneapi/mkl/rng/device.hpp>
+#include <oneapi/mkl/rng.hpp>
 
 #include "../main.hpp"
 #include "device.hpp"
@@ -124,11 +124,11 @@ catch (sycl::exception const &exc) {
 void InitializeCentroids(T_real *GPU_centroidT, T_real *GPU_dataT, sycl::nd_item<3> item)
 {
     int col = item.get_global_id(2);
-    oneapi::mkl::rng::device::philox4x32x10<1> engine{};
-    oneapi::mkl::rng::device::uniform<int> dist(0, NbPoints-1);
+    oneapi::mkl::rng::philox4x32x10<1> engine{dqueue};
+    oneapi::mkl::rng::uniform<int> dist(0, NbPoints-1);
 
     if (col < NbClusters) {
-        int idx = oneapi::mkl::rng::device::generate(dist, engine);
+        int idx = oneapi::mkl::rng::generate(dist, engine);
         for (int j = 0; j < NbDims; j++)
             GPU_centroidT[j*NbClusters + col] = GPU_dataT[j*NbPoints + idx];
     }
@@ -444,7 +444,7 @@ void run_k_means(void) try {
 
         // Get GPU_centroidT by transposing GPU_centroid
         start = std::chrono::steady_clock::now();
-        oneapi::mkl::blas::gemm(dqueue, trans, nontrans, NbClusters, NbDims, NbDims, alpha, GPU_centroid,
+        oneapi::mkl::blas::row_major::gemm(dqueue, trans, nontrans, NbClusters, NbDims, NbDims, alpha, GPU_centroid,
                 NbDims, NULL, NbClusters, beta, GPU_centroidT, NbClusters);
         
         device_sync();
@@ -481,7 +481,7 @@ void run_k_means(void) try {
         beta = 0.0f;
 
         start = std::chrono::steady_clock::now();
-        oneapi::mkl::blas::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
+        oneapi::mkl::blas::row_major::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
                 NbClusters, NULL, NbDims, beta, GPU_centroid, NbDims);
         device_sync();
         stop = std::chrono::steady_clock::now();
@@ -540,7 +540,7 @@ void run_k_means(void) try {
         start = std::chrono::steady_clock::now();
         UpdateCentroids_Step2_Parent(GPU_package, GPU_centroidT, GPU_count, dqueue);
 
-        oneapi::mkl::blas::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
+        oneapi::mkl::blas::row_major::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
                 NbClusters, NULL, NbDims, beta, GPU_centroid, NbDims);
         device_sync();
 
