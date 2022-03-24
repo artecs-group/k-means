@@ -1,10 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <chrono>
+#include <random>
 #include <CL/sycl.hpp>
 #include <dpct/dpct.hpp>
 #include <oneapi/mkl.hpp>
-#include <oneapi/mkl/rng.hpp>
+//#include <oneapi/mkl/rng.hpp>
 
 #include "../main.hpp"
 #include "device.hpp"
@@ -121,17 +122,32 @@ catch (sycl::exception const &exc) {
 /* Select initial centroids                                                                */
 /*-----------------------------------------------------------------------------------------*/
 
-void InitializeCentroids(T_real *GPU_centroidT, T_real *GPU_dataT, sycl::nd_item<3> item)
+void InitializeCentroids(T_real* GPU_centroidT, T_real* GPU_dataT, sycl::range<3> Db, sycl::range<3> Dg)
 {
-    int col = item.get_global_id(2);
-    oneapi::mkl::rng::philox4x32x10<1> engine{dqueue};
-    oneapi::mkl::rng::uniform<int> dist(0, NbPoints-1);
+    int* r = sycl::malloc_shared<int>(NbPoints, dqueue);
 
-    if (col < NbClusters) {
-        int idx = oneapi::mkl::rng::generate(dist, engine);
-        for (int j = 0; j < NbDims; j++)
-            GPU_centroidT[j*NbClusters + col] = GPU_dataT[j*NbPoints + idx];
+    std::random_device random_device;
+    std::mt19937 random_engine(random_device());
+    std::uniform_int_distribution<int> distribution(0, NbPoints-1);
+
+    for(int i{0}; i < NbPoints; i++)
+        r[i] = distribution(random_engine);
+
+    dqueue.submit([&](sycl::handler &cgh) {
+        cgh.parallel_for(
+            sycl::nd_range<3>(Dg * Db, Db), [=](sycl::nd_item<3> item) {
+                int col = item.get_local_id(2) + item.get_group(2) * item.get_local_range(2);
+
+                if (col < NbClusters) {
+                    int idx = r[col];
+                    for (int j = 0; j < NbDims; j++)
+                        GPU_centroidT[j*NbClusters + col] = GPU_dataT[j*NbPoints + idx];
+                }         
     }
+                }         
+            });
+    }).wait();
+    free(r, dqueue);
 }
 
 
@@ -446,7 +462,6 @@ void run_k_means(void) try {
         start = std::chrono::steady_clock::now();
         oneapi::mkl::blas::row_major::gemm(dqueue, trans, nontrans, NbClusters, NbDims, NbDims, alpha, GPU_centroid,
                 NbDims, NULL, NbClusters, beta, GPU_centroidT, NbClusters);
-        
         device_sync();
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
@@ -462,16 +477,7 @@ void run_k_means(void) try {
         Dg[0] = 1;
 
         start = std::chrono::steady_clock::now();
-        dqueue.submit([&](sycl::handler &cgh) {
-            auto GPU_centroidT_ct1 = GPU_centroidT;
-            auto GPU_dataT_ct2 = GPU_dataT;
-
-            cgh.parallel_for(
-                sycl::nd_range<3>(Dg * Db, Db), [=](sycl::nd_item<3> item) {
-                    InitializeCentroids(GPU_centroidT_ct1, GPU_dataT_ct2, item);
-                });
-        });
-        device_sync();
+        InitializeCentroids(GPU_centroidT, GPU_dataT, Db, Dg);
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
         Tms_init += elapsed;
@@ -481,7 +487,7 @@ void run_k_means(void) try {
         beta = 0.0f;
 
         start = std::chrono::steady_clock::now();
-        oneapi::mkl::blas::row_major::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
+        oneapi::mkl::blas::column_major::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
                 NbClusters, NULL, NbDims, beta, GPU_centroid, NbDims);
         device_sync();
         stop = std::chrono::steady_clock::now();
@@ -540,7 +546,7 @@ void run_k_means(void) try {
         start = std::chrono::steady_clock::now();
         UpdateCentroids_Step2_Parent(GPU_package, GPU_centroidT, GPU_count, dqueue);
 
-        oneapi::mkl::blas::row_major::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
+        oneapi::mkl::blas::column_major::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
                 NbClusters, NULL, NbDims, beta, GPU_centroid, NbDims);
         device_sync();
 
@@ -558,4 +564,23 @@ catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
             << ", line:" << __LINE__ << std::endl;
   std::exit(1);
+}
+
+
+__global__ void transpose_sharedMem(float *odata, const float *idata, const uint32 width, const uint32 height)
+{
+    __shared__ float tile[32][33];
+    int x = blockIdx.x * 32 + threadIdx.x;
+    int y = blockIdx.y * 32 + threadIdx.y;
+
+    if (x < width && y < height)
+    { 
+        tile[threadIdx.y][threadIdx.x] = idata[y*width + x];
+        __syncthreads();
+
+        x = blockIdx.y * 32 + threadIdx.x; // transpose block offset
+        y = blockIdx.x * 32 + threadIdx.y;
+
+        odata[y*height + x] = tile[threadIdx.x][threadIdx.y];
+    }
 }
