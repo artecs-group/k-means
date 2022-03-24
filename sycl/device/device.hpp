@@ -31,7 +31,9 @@ class IntelGpuSelector : public cl::sycl::device_selector {
         }
 };
 
+inline int pow2roundup(int x);
 sycl::queue get_queue(void);
+void transpose(T_real *odata, const T_real *idata);
 void device_sync(void);
 void device_init(void);
 void device_finish(void);

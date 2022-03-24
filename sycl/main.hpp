@@ -21,6 +21,10 @@
 #define nStreams1   16            // Number of streams for Update_step1
 #define nStreams2   32            // Number of streams for Update_step2
 
+// Traspose values
+#define T_TILE_DIM   32
+#define T_BLOCK_ROWS 8
+
 // Default values
 #define DEFAULT_ONGPUFLAG     1         // Default flag of computation on GPU
 #define DEFAULT_NB_THREADS    1         // Default number of OpenMP threads on CPU

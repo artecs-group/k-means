@@ -21,9 +21,25 @@ T_real *GPU_package;     // Array for the packages used in UpdateCentroids
 int *GPU_label;          // Array for cluster labels of data points
 int *GPU_count;          // Count of data instances in each cluster
 unsigned long long int* GPU_track_sum; // Sum of label changes in two consecutive iterations
+const int NbClusters_pad{pow2roundup(NbClusters)};
+const int NbDims_pad{pow2roundup(NbDims)};
 
 sycl::queue dqueue;
 std::chrono::time_point<std::chrono::steady_clock> start, stop;
+
+
+inline int pow2roundup(int x) {
+    if(x % 2 == 0)
+        return x;
+
+    --x;
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    return x+1;
+}
 
 
 sycl::queue get_queue() {
@@ -56,8 +72,8 @@ void device_init(void) try {
 
     // Allocate memory space for the dynamic arrays
     GPU_dataT     = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbPoints, dqueue);
-    GPU_centroid  = (T_real *)sycl::malloc_device(sizeof(T_real) * NbClusters * NbDims, dqueue);
-    GPU_centroidT = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbClusters, dqueue);
+    GPU_centroid  = (T_real *)sycl::malloc_device(sizeof(T_real) * NbClusters_pad * NbDims_pad, dqueue);
+    GPU_centroidT = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims_pad * NbClusters_pad, dqueue);
     GPU_package   = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbClusters * NbPackages, dqueue);
     GPU_label     = sycl::malloc_device<int>(NbPoints, dqueue);
     GPU_count     = sycl::malloc_device<int>(NbClusters, dqueue);
@@ -142,12 +158,10 @@ void InitializeCentroids(T_real* GPU_centroidT, T_real* GPU_dataT, sycl::range<3
                     int idx = r[col];
                     for (int j = 0; j < NbDims; j++)
                         GPU_centroidT[j*NbClusters + col] = GPU_dataT[j*NbPoints + idx];
-                }         
-    }
-                }         
+                }                 
             });
     }).wait();
-    free(r, dqueue);
+    sycl::free(r, dqueue);
 }
 
 
@@ -443,9 +457,6 @@ void run_k_means(void) try {
     sycl::range<3> Dg(1, 1, 1), Db(1, 1, 1);
     double tolerance = 0.0;
     float elapsed;
-    T_real alpha, beta;       // Parameters for BLAS_GEAM
-    constexpr oneapi::mkl::transpose trans = oneapi::mkl::transpose::trans;
-    constexpr oneapi::mkl::transpose nontrans = oneapi::mkl::transpose::nontrans;
 
     // Reset global variables to zeros
     NbIters = 0;              
@@ -455,13 +466,10 @@ void run_k_means(void) try {
     Tms_update = 0.0f;
 
     if (strcmp(INPUT_INITIAL_CENTROIDS, "") != 0) {
-        alpha = 1.0f;
-        beta = 0.0f;
 
         // Get GPU_centroidT by transposing GPU_centroid
         start = std::chrono::steady_clock::now();
-        oneapi::mkl::blas::row_major::gemm(dqueue, trans, nontrans, NbClusters, NbDims, NbDims, alpha, GPU_centroid,
-                NbDims, NULL, NbClusters, beta, GPU_centroidT, NbClusters);
+        transpose(GPU_centroidT, GPU_centroid);
         device_sync();
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
@@ -482,13 +490,8 @@ void run_k_means(void) try {
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
         Tms_init += elapsed;
 
-        // Get GPU_centroid by transposing GPU_centroidT
-        alpha = 1.0f;
-        beta = 0.0f;
-
         start = std::chrono::steady_clock::now();
-        oneapi::mkl::blas::column_major::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
-                NbClusters, NULL, NbDims, beta, GPU_centroid, NbDims);
+        transpose(GPU_centroid, GPU_centroidT);
         device_sync();
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
@@ -538,16 +541,10 @@ void run_k_means(void) try {
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
         Tms_update += elapsed;
-		
-        // Update centroids - Step2
-        alpha = 1.0f;
-        beta = 0.0f;
 
         start = std::chrono::steady_clock::now();
         UpdateCentroids_Step2_Parent(GPU_package, GPU_centroidT, GPU_count, dqueue);
-
-        oneapi::mkl::blas::column_major::gemm(dqueue, trans, nontrans, NbDims, NbClusters, NbClusters, alpha, GPU_centroidT,
-                NbClusters, NULL, NbDims, beta, GPU_centroid, NbDims);
+        transpose(GPU_centroid, GPU_centroidT);
         device_sync();
 
         stop = std::chrono::steady_clock::now();
@@ -567,20 +564,27 @@ catch (sycl::exception const &exc) {
 }
 
 
-__global__ void transpose_sharedMem(float *odata, const float *idata, const uint32 width, const uint32 height)
-{
-    __shared__ float tile[32][33];
-    int x = blockIdx.x * 32 + threadIdx.x;
-    int y = blockIdx.y * 32 + threadIdx.y;
+void transpose(T_real *odata, const T_real *idata) {
+    sycl::range<2> dimGrid(NbClusters_pad/T_TILE_DIM, NbClusters_pad/T_TILE_DIM), dimBlock(T_TILE_DIM, T_BLOCK_ROWS);
 
-    if (x < width && y < height)
-    { 
-        tile[threadIdx.y][threadIdx.x] = idata[y*width + x];
-        __syncthreads();
+    dqueue.submit([&](sycl::handler &cgh) {
+        sycl::accessor<T_real, 2, sycl::access_mode::read_write, sycl::access::target::local> tile(sycl::range<2>(T_TILE_DIM, T_TILE_DIM+1), cgh);
+        cgh.parallel_for(sycl::nd_range<2>(dimGrid * dimBlock, dimBlock), [=](sycl::nd_item<2> item) {
 
-        x = blockIdx.y * 32 + threadIdx.x; // transpose block offset
-        y = blockIdx.x * 32 + threadIdx.y;
+            int x = item.get_group(0) * T_TILE_DIM + item.get_local_id(0);
+            int y = item.get_group(1) * T_TILE_DIM + item.get_local_id(1);
+            int width = item.get_group_range(0) * T_TILE_DIM;
 
-        odata[y*height + x] = tile[threadIdx.x][threadIdx.y];
-    }
+            for (int j = 0; j < T_TILE_DIM; j += T_BLOCK_ROWS)
+                tile[item.get_local_id(1)+j][item.get_local_id(0)] = idata[(y+j)*width + x];
+
+            item.barrier(sycl::access::fence_space::local_space);
+
+            x = item.get_group(1) * T_TILE_DIM + item.get_local_id(0);  // transpose block offset
+            y = item.get_group(0) * T_TILE_DIM + item.get_local_id(1);
+
+            for (int j = 0; j < T_TILE_DIM; j += T_BLOCK_ROWS)
+                odata[(y+j)*width + x] = tile[item.get_local_id(0)][item.get_local_id(1) + j];        
+        });
+    });
 }
