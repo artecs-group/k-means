@@ -1,5 +1,6 @@
-DEVICE      = cpu # {cpu, nvidia, igpu}
-REAL        = simple # {simple, double}
+DEVICE = cpu # {cpu, nvidia, igpu}
+REAL   = simple # {simple, double}
+DEBUG  = no #{yes, no}
 
 CPU = CPU_DEVICE
 IGPU = INTEL_IGPU_DEVICE
@@ -8,6 +9,7 @@ NVIDIA = NVIDIA_DEVICE
 # Program flags
 PDEVICE = $(CPU)
 PREAL = SP
+OPTIMIZATION = -O3
 
 ifeq ($(DEVICE),nvidia)
   PDEVICE = NVIDIA_DEVICE
@@ -19,15 +21,19 @@ ifeq ($(REAL),double)
   PREAL = DP
 endif
 
+ifeq ($(DEBUG),yes)
+  OPTIMIZATION = -g -O0
+endif
+
 DPCPP = dpcpp
-CFLAGS = -O3 -D$(PDEVICE) -D$(PREAL) -qmkl -DMKL_ILP64 -I"${MKLROOT}/include"
+CFLAGS = $(OPTIMIZATION) -D$(PDEVICE) -D$(PREAL) -qmkl -DMKL_ILP64 -I"${MKLROOT}/include"
 CLINK = -fsycl-device-code-split=per_kernel  ${MKLROOT}/lib/intel64/libmkl_sycl.a -Wl,-export-dynamic -Wl,--start-group ${MKLROOT}/lib/intel64/libmkl_intel_ilp64.a ${MKLROOT}/lib/intel64/libmkl_tbb_thread.a ${MKLROOT}/lib/intel64/libmkl_core.a -Wl,--end-group -L${TBBROOT}/lib/intel64/gcc4.8 -ltbb -lsycl -lOpenCL -lpthread -lm -ldl
 
 ifeq ($(DEVICE),nvidia)
   ONEAPI_DIR=/media/youss/oneapi
   DPCT_INCLUDE_DIR = $(ONEAPI_DIR)/dpcpp-ct/latest/include/
   DPCPP = clang++
-  CFLAGS = -D$(PDEVICE) -D$(PREAL) -fsycl -fsycl-targets=nvptx64-nvidia-cuda -I${ONEMKL}/include -I$(DPCT_INCLUDE_DIR)
+  CFLAGS = $(OPTIMIZATION) -D$(PDEVICE) -D$(PREAL) -fsycl -fsycl-targets=nvptx64-nvidia-cuda -I${ONEMKL}/include -I$(DPCT_INCLUDE_DIR)
   CLINK = -fsycl-device-code-split=per_kernel -L${ONEMKL}/lib -lonemkl
 endif
 
