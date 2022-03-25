@@ -41,6 +41,33 @@ inline int pow2roundup(int x) {
     return x+1;
 }
 
+void printMATRIX(T_real *m, int I, int J) {	
+	printf("--------------------- matrix --------------------\n");
+	printf("             ");
+	for (int j = 0; j < J; j++) {
+		if (j < 10)
+			printf("%i      ", j);
+		else if (j < 100)
+			printf("%i     ", j);
+		else 
+			printf("%i    ", j);
+	}
+	printf("\n");
+
+	for (int i = 0; i < I; i++) {
+		if (i<10)
+			printf("Line   %i: ", i);
+		else if (i<100)
+			printf("Line  %i: ", i);
+		else
+			printf("Line %i: ", i);
+
+		for (int j = 0; j < J; j++)
+			printf("%5.4f ", m[i*J + j]);
+		printf("\n");
+	}
+}
+
 
 sycl::queue get_queue() {
 #if defined(INTEL_GPU_DEVICE)
@@ -469,7 +496,7 @@ void run_k_means(void) try {
 
         // Get GPU_centroidT by transposing GPU_centroid
         start = std::chrono::steady_clock::now();
-        transpose(GPU_centroidT, GPU_centroid);
+        transpose(GPU_centroidT, GPU_centroid, NbClusters_pad, NbDims_pad);
         device_sync();
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
@@ -491,8 +518,10 @@ void run_k_means(void) try {
         Tms_init += elapsed;
 
         start = std::chrono::steady_clock::now();
-        transpose(GPU_centroid, GPU_centroidT);
+        transpose(GPU_centroid, GPU_centroidT, NbDims_pad, NbClusters_pad);
         device_sync();
+        printMATRIX(GPU_centroid, NbClusters_pad, NbDims_pad);
+        printMATRIX(GPU_centroidT, NbDims_pad, NbClusters_pad);
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
         Tms_transpose += elapsed;
@@ -544,7 +573,7 @@ void run_k_means(void) try {
 
         start = std::chrono::steady_clock::now();
         UpdateCentroids_Step2_Parent(GPU_package, GPU_centroidT, GPU_count, dqueue);
-        transpose(GPU_centroid, GPU_centroidT);
+        transpose(GPU_centroid, GPU_centroidT, NbDims_pad, NbClusters_pad);
         device_sync();
 
         stop = std::chrono::steady_clock::now();
@@ -564,26 +593,30 @@ catch (sycl::exception const &exc) {
 }
 
 
-void transpose(T_real *odata, const T_real *idata) {
-    sycl::range<2> dimGrid(NbClusters_pad/T_TILE_DIM, NbClusters_pad/T_TILE_DIM), dimBlock(T_TILE_DIM, T_BLOCK_ROWS);
+void transpose(T_real *odata, const T_real *idata, size_t m , size_t n) {
+    size_t tile_dim = (T_TILE_DIM < m) ? T_TILE_DIM : m;
+    size_t block_rows = (T_BLOCK_ROWS < n) ? T_BLOCK_ROWS : n;
+    size_t dim_grid_y = (T_TILE_DIM < n) ? n/tile_dim : 1;
+ 
+    sycl::range<2> dimGrid(m/tile_dim, dim_grid_y), dimBlock(tile_dim, block_rows);
 
     dqueue.submit([&](sycl::handler &cgh) {
-        sycl::accessor<T_real, 2, sycl::access_mode::read_write, sycl::access::target::local> tile(sycl::range<2>(T_TILE_DIM, T_TILE_DIM+1), cgh);
+        sycl::accessor<T_real, 2, sycl::access_mode::read_write, sycl::access::target::local> tile(sycl::range<2>(tile_dim, tile_dim), cgh);
         cgh.parallel_for(sycl::nd_range<2>(dimGrid * dimBlock, dimBlock), [=](sycl::nd_item<2> item) {
 
-            int x = item.get_group(0) * T_TILE_DIM + item.get_local_id(0);
-            int y = item.get_group(1) * T_TILE_DIM + item.get_local_id(1);
-            int width = item.get_group_range(0) * T_TILE_DIM;
+            int x = item.get_group(0) * tile_dim + item.get_local_id(0);
+            int y = item.get_group(1) * tile_dim + item.get_local_id(1);
+            int width = item.get_group_range(0) * tile_dim;
 
-            for (int j = 0; j < T_TILE_DIM; j += T_BLOCK_ROWS)
+            for (int j = 0; j < tile_dim; j += block_rows)
                 tile[item.get_local_id(1)+j][item.get_local_id(0)] = idata[(y+j)*width + x];
 
             item.barrier(sycl::access::fence_space::local_space);
 
-            x = item.get_group(1) * T_TILE_DIM + item.get_local_id(0);  // transpose block offset
-            y = item.get_group(0) * T_TILE_DIM + item.get_local_id(1);
+            x = item.get_group(1) * tile_dim + item.get_local_id(0);  // transpose block offset
+            y = item.get_group(0) * tile_dim + item.get_local_id(1);
 
-            for (int j = 0; j < T_TILE_DIM; j += T_BLOCK_ROWS)
+            for (int j = 0; j < tile_dim; j += block_rows)
                 odata[(y+j)*width + x] = tile[item.get_local_id(0)][item.get_local_id(1) + j];        
         });
     });
