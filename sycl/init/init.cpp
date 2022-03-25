@@ -299,17 +299,8 @@ void PrintResultsAndPerf(void)
     fprintf(stdout,"    Time of ComputeAssign per iteration:      %f ms\n", Tms_compute_assign/NbIters);
     fprintf(stdout,"    Time of UpdateCentroids per iteration:    %f ms\n", Tms_update/NbIters);
     fprintf(stdout,"    Time of one iteration:                    %f ms\n", (Tms_compute_assign + Tms_update)/NbIters);
-    if (OnGPUFlag) {
-        fprintf(stdout,"    Time of computation on GPU:               %f s\n", (float) Ts_computation);
-        fprintf(stdout,"    Time of transfers and computation on GPU: %f s\n", (float) Ts_transfer_computation);
-    } else {
-        fprintf(stdout,"    Time of computation on CPU:               %f s\n", (float) Ts_computation);
-    }
-    // fprintf(stdout,"    Time of writing clustering results:       %f s\n", (float) Ts_output);
-    // fprintf(stdout,"    Total elapsed time of the app.:           %f s\n", (float) Ts_application);
-
-    // To uncomment the following code when using the synthetic dataset specified in our paper
-    // fprintf(stdout,"    Average numerical error of final calculated centroids: %lf\n", NumError);
+    fprintf(stdout,"    Time of computation on device:               %f s\n", (float) Ts_computation);
+    fprintf(stdout,"    Time of transfers and computation on device: %f s\n", (float) Ts_transfer_computation);
 
     fflush(stdout);
 }
