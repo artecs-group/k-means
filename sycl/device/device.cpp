@@ -203,7 +203,7 @@ void ComputeAssign(T_real *GPU_dataT, T_real *GPU_centroid, int *GPU_label, unsi
     sycl::nd_item<3> item, local_ptr<unsigned long long int> shTrack)
 {
     int local_idx = item.get_local_id(2);
-    int idx = item.get_group(0) * BSXN + item.get_local_id(2);
+    int idx = item.get_group(2) * BSXN + item.get_local_id(2);
 
     shTrack[local_idx] = 0;
 
@@ -534,9 +534,9 @@ void run_k_means(void) try {
                 ComputeAssign(GPU_dataT_d, GPU_centroid_d, GPU_label_d, GPU_track_sum_d, item, shTrack.get_pointer());
             });
         });
+        device_sync();
         dqueue.memcpy(track, GPU_track_sum, sizeof(unsigned long long int));
         device_sync();
-        std::cout << GPU_track_sum[0] << std::endl;
 
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
@@ -558,6 +558,7 @@ void run_k_means(void) try {
 
         start = std::chrono::steady_clock::now();
         UpdateCentroids_Step2_Parent(GPU_package, GPU_centroidT, GPU_count, dqueue);
+        device_sync();
         transpose(GPU_centroid, GPU_centroidT, NbDims_pad, NbClusters_pad);
         device_sync();
 
