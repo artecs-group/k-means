@@ -20,6 +20,7 @@ T_real *GPU_centroidT;   // Array for the transposed matrix of centroids
 T_real *GPU_package;     // Array for the packages used in UpdateCentroids
 int *GPU_label;          // Array for cluster labels of data points
 int *GPU_count;          // Count of data instances in each cluster
+unsigned long long int* track;            // Number of points changing label between two iterations
 unsigned long long int* GPU_track_sum; // Sum of label changes in two consecutive iterations
 const int NbClusters_pad{pow2roundup(NbClusters)};
 const int NbDims_pad{pow2roundup(NbDims)};
@@ -105,6 +106,7 @@ void device_init(void) try {
     GPU_label     = sycl::malloc_device<int>(NbPoints, dqueue);
     GPU_count     = sycl::malloc_device<int>(NbClusters, dqueue);
     GPU_track_sum = sycl::malloc_device<unsigned long long int>(1, dqueue);
+    track         = sycl::malloc_host<unsigned long long int>(1, dqueue);
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -121,6 +123,8 @@ void device_finish(void) try {
     sycl::free(GPU_package, dqueue);
     sycl::free(GPU_label, dqueue);
     sycl::free(GPU_count, dqueue);
+    sycl::free(GPU_track_sum, dqueue);
+    sycl::free(track, dqueue);
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -196,7 +200,7 @@ void InitializeCentroids(T_real* GPU_centroidT, T_real* GPU_dataT, sycl::range<3
 /* Compute point-centroid distances and assign each point to a cluter                      */
 /*-----------------------------------------------------------------------------------------*/
 void ComputeAssign(T_real *GPU_dataT, T_real *GPU_centroid, int *GPU_label, unsigned long long int *GPU_track_sum,
-    sycl::nd_item<3> item, local_ptr<unsigned long long> shTrack)
+    sycl::nd_item<3> item, local_ptr<unsigned long long int> shTrack)
 {
     int local_idx = item.get_local_id(2);
     int idx = item.get_group(0) * BSXN + item.get_local_id(2);
@@ -241,76 +245,58 @@ void ComputeAssign(T_real *GPU_dataT, T_real *GPU_centroid, int *GPU_label, unsi
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 256)
             shTrack[local_idx] += shTrack[local_idx + 256];
-        else
-            return;
     #endif
 
     #if BSXN > 128
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 128)
             shTrack[local_idx] += shTrack[local_idx + 128];
-        else
-            return;
     #endif
 
     #if BSXN > 64
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 64)
             shTrack[local_idx] += shTrack[local_idx + 64];
-        else
-            return;
     #endif
 
     #if BSXN > 32
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 32)
             shTrack[local_idx] += shTrack[local_idx + 32];
-        else
-            return;
     #endif
 
     #if BSXN > 16
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 16)
             shTrack[local_idx] += shTrack[local_idx + 16];
-        else
-            return;
     #endif
 
     #if BSXN > 8
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 8)
             shTrack[local_idx] += shTrack[local_idx + 8];
-        else
-            return;
     #endif
 
     #if BSXN > 4
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 4)
             shTrack[local_idx] += shTrack[local_idx + 4];
-        else
-            return;
     #endif
 
     #if BSXN > 2
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 2)
             shTrack[local_idx] += shTrack[local_idx + 2];
-        else
-            return;
     #endif
 
     #if BSXN > 1
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 1)
             shTrack[local_idx] += shTrack[local_idx + 1];
-        else
-            return;
     #endif
 
     // 2 - Final reduction into a global array
-    if (shTrack[0] > 0)
+    if (local_idx == 0)
         sycl::atomic<unsigned long long>(sycl::global_ptr<unsigned long long>(&GPU_track_sum[0])).fetch_add(shTrack[0]);
 }
 
@@ -520,8 +506,6 @@ void run_k_means(void) try {
         start = std::chrono::steady_clock::now();
         transpose(GPU_centroid, GPU_centroidT, NbDims_pad, NbClusters_pad);
         device_sync();
-        printMATRIX(GPU_centroid, NbClusters_pad, NbDims_pad);
-        printMATRIX(GPU_centroidT, NbDims_pad, NbClusters_pad);
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
         Tms_transpose += elapsed;
@@ -547,11 +531,12 @@ void run_k_means(void) try {
             auto GPU_track_sum_d = GPU_track_sum;
             sycl::accessor<unsigned long long int, 1, sycl::access_mode::read_write, sycl::access::target::local> shTrack(sycl::range<1>(BSXN), cgh);
             cgh.parallel_for(sycl::nd_range<3>(Dg * Db, Db), [=](sycl::nd_item<3> item) {
-                    ComputeAssign(GPU_dataT_d, GPU_centroid_d, GPU_label_d, GPU_track_sum_d, item, shTrack.get_pointer());
-                });
+                ComputeAssign(GPU_dataT_d, GPU_centroid_d, GPU_label_d, GPU_track_sum_d, item, shTrack.get_pointer());
+            });
         });
-        dqueue.memcpy(&track, GPU_track_sum, sizeof(unsigned long long int) * 1);
+        dqueue.memcpy(track, GPU_track_sum, sizeof(unsigned long long int));
         device_sync();
+        std::cout << GPU_track_sum[0] << std::endl;
 
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
@@ -582,7 +567,7 @@ void run_k_means(void) try {
 
         // Calculate the variables for checking stopping criteria
         NbIters++;   // Count the number of iterations
-        tolerance = (double)track / NbPoints;     
+        tolerance = (double)track[0] / NbPoints;     
         //printf("Track = %llu  Tolerance = %lf\n", track, tolerance); 
     } while (tolerance > TOL && NbIters < MaxNbIters);
 }
@@ -594,30 +579,41 @@ catch (sycl::exception const &exc) {
 
 
 void transpose(T_real *odata, const T_real *idata, size_t m , size_t n) {
-    size_t tile_dim = (T_TILE_DIM < m) ? T_TILE_DIM : m;
-    size_t block_rows = (T_BLOCK_ROWS < n) ? T_BLOCK_ROWS : n;
-    size_t dim_grid_y = (T_TILE_DIM < n) ? n/tile_dim : 1;
+    // size_t tile_dim = (T_TILE_DIM < m) ? T_TILE_DIM : m;
+    // size_t block_rows = (T_BLOCK_ROWS < n) ? T_BLOCK_ROWS : n;
+    // size_t dim_grid_y = (T_TILE_DIM < n) ? n/tile_dim : 1;
  
-    sycl::range<2> dimGrid(m/tile_dim, dim_grid_y), dimBlock(tile_dim, block_rows);
+    // sycl::range<2> dimGrid(m/tile_dim, dim_grid_y), dimBlock(tile_dim, block_rows);
 
+    // dqueue.submit([&](sycl::handler &cgh) {
+    //     sycl::accessor<T_real, 2, sycl::access_mode::read_write, sycl::access::target::local> tile(sycl::range<2>(tile_dim, tile_dim), cgh);
+    //     cgh.parallel_for(sycl::nd_range<2>(dimGrid * dimBlock, dimBlock), [=](sycl::nd_item<2> item) {
+
+    //         int x = item.get_group(0) * tile_dim + item.get_local_id(0);
+    //         int y = item.get_group(1) * tile_dim + item.get_local_id(1);
+    //         int width = item.get_group_range(0) * tile_dim;
+
+    //         for (int j = 0; j < tile_dim; j += block_rows)
+    //             tile[item.get_local_id(1)+j][item.get_local_id(0)] = idata[(y+j)*width + x];
+
+    //         item.barrier(sycl::access::fence_space::local_space);
+
+    //         x = item.get_group(1) * tile_dim + item.get_local_id(0);  // transpose block offset
+    //         y = item.get_group(0) * tile_dim + item.get_local_id(1);
+
+    //         for (int j = 0; j < tile_dim; j += block_rows)
+    //             odata[(y+j)*width + x] = tile[item.get_local_id(0)][item.get_local_id(1) + j];        
+    //     });
+    // });
     dqueue.submit([&](sycl::handler &cgh) {
-        sycl::accessor<T_real, 2, sycl::access_mode::read_write, sycl::access::target::local> tile(sycl::range<2>(tile_dim, tile_dim), cgh);
-        cgh.parallel_for(sycl::nd_range<2>(dimGrid * dimBlock, dimBlock), [=](sycl::nd_item<2> item) {
+        auto task = [=]() {
+            for(int i{0}; i < m; i++) {
+                for(int j{0}; j < n; j++)
+                    odata[j*m + i] = idata[i*n + j];
+            }
+	    };
 
-            int x = item.get_group(0) * tile_dim + item.get_local_id(0);
-            int y = item.get_group(1) * tile_dim + item.get_local_id(1);
-            int width = item.get_group_range(0) * tile_dim;
-
-            for (int j = 0; j < tile_dim; j += block_rows)
-                tile[item.get_local_id(1)+j][item.get_local_id(0)] = idata[(y+j)*width + x];
-
-            item.barrier(sycl::access::fence_space::local_space);
-
-            x = item.get_group(1) * tile_dim + item.get_local_id(0);  // transpose block offset
-            y = item.get_group(0) * tile_dim + item.get_local_id(1);
-
-            for (int j = 0; j < tile_dim; j += block_rows)
-                odata[(y+j)*width + x] = tile[item.get_local_id(0)][item.get_local_id(1) + j];        
-        });
+	    cgh.single_task(task);
     });
+
 }

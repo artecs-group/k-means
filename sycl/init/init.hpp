@@ -8,7 +8,6 @@ extern T_real *dataT;
 extern T_real centroid[NbClusters][NbDims];
 extern T_real package[NbClusters][NbDims];
 extern int *label;
-extern unsigned long long int track;
 extern int count[NbClusters];
 
 extern float Tms_init; 

@@ -20,7 +20,6 @@ T_real *dataT;                           // Array for the transponsed matrix of 
 T_real centroid[NbClusters][NbDims];     // Centroids 
 T_real package[NbClusters][NbDims];      // Package
 int *label;                              // Array for cluster labels of data points
-unsigned long long int track;            // Number of points changing label between two iterations
 int count[NbClusters];                   // Number of points in each cluster 
 
 float Tms_init;                          // Time in ms of initializing centroids
