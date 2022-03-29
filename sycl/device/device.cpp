@@ -5,7 +5,7 @@
 #include <CL/sycl.hpp>
 #include <dpct/dpct.hpp>
 #include <oneapi/mkl.hpp>
-//#include <oneapi/mkl/rng.hpp>
+#include <oneapi/mkl/rng.hpp>
 
 #include "../main.hpp"
 #include "device.hpp"
@@ -40,33 +40,6 @@ inline int pow2roundup(int x) {
     x |= x >> 8;
     x |= x >> 16;
     return x+1;
-}
-
-void printMATRIX(T_real *m, int I, int J) {	
-	printf("--------------------- matrix --------------------\n");
-	printf("             ");
-	for (int j = 0; j < J; j++) {
-		if (j < 10)
-			printf("%i      ", j);
-		else if (j < 100)
-			printf("%i     ", j);
-		else 
-			printf("%i    ", j);
-	}
-	printf("\n");
-
-	for (int i = 0; i < I; i++) {
-		if (i<10)
-			printf("Line   %i: ", i);
-		else if (i<100)
-			printf("Line  %i: ", i);
-		else
-			printf("Line %i: ", i);
-
-		for (int j = 0; j < J; j++)
-			printf("%5.4f ", m[i*J + j]);
-		printf("\n");
-	}
 }
 
 
@@ -171,16 +144,14 @@ catch (sycl::exception const &exc) {
 
 void InitializeCentroids(T_real* GPU_centroidT, T_real* GPU_dataT, sycl::range<3> Db, sycl::range<3> Dg)
 {
-    int* r = sycl::malloc_shared<int>(NbPoints, dqueue);
-
-    std::random_device random_device;
-    std::mt19937 random_engine(random_device());
-    std::uniform_int_distribution<int> distribution(0, NbPoints-1);
-
-    for(int i{0}; i < NbPoints; i++)
-        r[i] = distribution(random_engine);
+    oneapi::mkl::rng::philox4x32x10 engine(dqueue); // basic random number generator object
+    oneapi::mkl::rng::uniform<std::int32_t> distr(0, NbPoints-1); //  distribution object
+    //create buffer for random numbers
+    sycl::buffer<std::int32_t, 1> r_buf(NbPoints);
+    oneapi::mkl::rng::generate(distr, engine, NbPoints, r_buf); // perform generation
 
     dqueue.submit([&](sycl::handler &cgh) {
+        auto r = r_buf.get_access<access::mode::read>(cgh);
         cgh.parallel_for(
             sycl::nd_range<3>(Dg * Db, Db), [=](sycl::nd_item<3> item) {
                 int col = item.get_local_id(2) + item.get_group(2) * item.get_local_range(2);
@@ -191,8 +162,7 @@ void InitializeCentroids(T_real* GPU_centroidT, T_real* GPU_dataT, sycl::range<3
                         GPU_centroidT[j*NbClusters + col] = GPU_dataT[j*NbPoints + idx];
                 }                 
             });
-    }).wait();
-    sycl::free(r, dqueue);
+    });
 }
 
 
@@ -245,59 +215,76 @@ void ComputeAssign(T_real *GPU_dataT, T_real *GPU_centroid, int *GPU_label, unsi
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 256)
             shTrack[local_idx] += shTrack[local_idx + 256];
+        else
+            return;
     #endif
 
     #if BSXN > 128
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 128)
             shTrack[local_idx] += shTrack[local_idx + 128];
+        else
+            return;
     #endif
 
     #if BSXN > 64
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 64)
             shTrack[local_idx] += shTrack[local_idx + 64];
+        else
+            return;
     #endif
 
     #if BSXN > 32
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 32)
             shTrack[local_idx] += shTrack[local_idx + 32];
+        else
+            return;
     #endif
 
     #if BSXN > 16
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 16)
             shTrack[local_idx] += shTrack[local_idx + 16];
+        else
+            return;
     #endif
 
     #if BSXN > 8
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 8)
             shTrack[local_idx] += shTrack[local_idx + 8];
+        else
+            return;
     #endif
 
     #if BSXN > 4
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 4)
             shTrack[local_idx] += shTrack[local_idx + 4];
+        else
+            return;
     #endif
 
     #if BSXN > 2
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 2)
             shTrack[local_idx] += shTrack[local_idx + 2];
+        else
+            return;
     #endif
 
     #if BSXN > 1
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 1)
             shTrack[local_idx] += shTrack[local_idx + 1];
+        else
+            return;
     #endif
 
     // 2 - Final reduction into a global array
-    if (local_idx == 0)
-        sycl::atomic<unsigned long long>(sycl::global_ptr<unsigned long long>(&GPU_track_sum[0])).fetch_add(shTrack[0]);
+    sycl::atomic<unsigned long long int>(sycl::global_ptr<unsigned long long int>(&GPU_track_sum[0])).fetch_add(shTrack[0]);
 }
 
 
