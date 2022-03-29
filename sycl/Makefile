@@ -54,4 +54,4 @@ main.o: ./device/device.o ./init/init.o main.cpp
 
 .PHONY: clean
 clean:
-	rm -f *.o $(EXECNAME) *.linkinfo *~ *.bak .depend ./device/*.o ./init/*.o
+	rm -f *.o $(EXECNAME) *.linkinfo *~ *.bak .depend ./device/*.o ./init/*.o *.txt

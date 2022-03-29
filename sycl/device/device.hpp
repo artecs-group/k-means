@@ -5,6 +5,9 @@
 
 using namespace cl::sycl;
 
+template <int unroll_factor>
+class Trans;
+
 // CUDA GPU selector
 class CudaGpuSelector : public cl::sycl::device_selector {
     public:
@@ -31,8 +34,8 @@ class IntelGpuSelector : public cl::sycl::device_selector {
         }
 };
 
-inline int pow2roundup(int x);
 sycl::queue get_queue(void);
+template <int unroll_factor>
 void transpose(T_real *odata, const T_real *idata, size_t m , size_t n);
 void device_sync(void);
 void device_init(void);

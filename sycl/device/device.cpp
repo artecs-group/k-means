@@ -22,25 +22,9 @@ int *GPU_label;          // Array for cluster labels of data points
 int *GPU_count;          // Count of data instances in each cluster
 unsigned long long int* track;            // Number of points changing label between two iterations
 unsigned long long int* GPU_track_sum; // Sum of label changes in two consecutive iterations
-const int NbClusters_pad{pow2roundup(NbClusters)};
-const int NbDims_pad{pow2roundup(NbDims)};
 
 sycl::queue dqueue;
 std::chrono::time_point<std::chrono::steady_clock> start, stop;
-
-
-inline int pow2roundup(int x) {
-    if(x % 2 == 0)
-        return x;
-
-    --x;
-    x |= x >> 1;
-    x |= x >> 2;
-    x |= x >> 4;
-    x |= x >> 8;
-    x |= x >> 16;
-    return x+1;
-}
 
 
 sycl::queue get_queue() {
@@ -73,8 +57,8 @@ void device_init(void) try {
 
     // Allocate memory space for the dynamic arrays
     GPU_dataT     = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbPoints, dqueue);
-    GPU_centroid  = (T_real *)sycl::malloc_device(sizeof(T_real) * NbClusters_pad * NbDims_pad, dqueue);
-    GPU_centroidT = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims_pad * NbClusters_pad, dqueue);
+    GPU_centroid  = (T_real *)sycl::malloc_device(sizeof(T_real) * NbClusters * NbDims, dqueue);
+    GPU_centroidT = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbClusters, dqueue);
     GPU_package   = (T_real *)sycl::malloc_device(sizeof(T_real) * NbDims * NbClusters * NbPackages, dqueue);
     GPU_label     = sycl::malloc_device<int>(NbPoints, dqueue);
     GPU_count     = sycl::malloc_device<int>(NbClusters, dqueue);
@@ -144,14 +128,16 @@ catch (sycl::exception const &exc) {
 
 void InitializeCentroids(T_real* GPU_centroidT, T_real* GPU_dataT, sycl::range<3> Db, sycl::range<3> Dg)
 {
-    oneapi::mkl::rng::philox4x32x10 engine(dqueue); // basic random number generator object
-    oneapi::mkl::rng::uniform<std::int32_t> distr(0, NbPoints-1); //  distribution object
-    //create buffer for random numbers
-    sycl::buffer<std::int32_t, 1> r_buf(NbPoints);
-    oneapi::mkl::rng::generate(distr, engine, NbPoints, r_buf); // perform generation
+    int* r = sycl::malloc_shared<int>(NbPoints, dqueue);
+
+    std::random_device random_device;
+    std::mt19937 random_engine(random_device());
+    std::uniform_int_distribution<int> distribution(0, NbPoints-1);
+
+    for(int i{0}; i < NbPoints; i++)
+        r[i] = distribution(random_engine);
 
     dqueue.submit([&](sycl::handler &cgh) {
-        auto r = r_buf.get_access<access::mode::read>(cgh);
         cgh.parallel_for(
             sycl::nd_range<3>(Dg * Db, Db), [=](sycl::nd_item<3> item) {
                 int col = item.get_local_id(2) + item.get_group(2) * item.get_local_range(2);
@@ -162,7 +148,8 @@ void InitializeCentroids(T_real* GPU_centroidT, T_real* GPU_dataT, sycl::range<3
                         GPU_centroidT[j*NbClusters + col] = GPU_dataT[j*NbPoints + idx];
                 }                 
             });
-    });
+    }).wait();
+    sycl::free(r, dqueue);
 }
 
 
@@ -207,84 +194,65 @@ void ComputeAssign(T_real *GPU_dataT, T_real *GPU_centroid, int *GPU_label, unsi
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 512)
             shTrack[local_idx] += shTrack[local_idx + 512];
-        else
-            return;
     #endif
 
     #if BSXN > 256
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 256)
             shTrack[local_idx] += shTrack[local_idx + 256];
-        else
-            return;
     #endif
 
     #if BSXN > 128
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 128)
             shTrack[local_idx] += shTrack[local_idx + 128];
-        else
-            return;
     #endif
 
     #if BSXN > 64
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 64)
             shTrack[local_idx] += shTrack[local_idx + 64];
-        else
-            return;
     #endif
 
     #if BSXN > 32
         item.barrier(sycl::access::fence_space::local_space);
         if (local_idx < 32)
             shTrack[local_idx] += shTrack[local_idx + 32];
-        else
-            return;
     #endif
 
     #if BSXN > 16
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 16)
             shTrack[local_idx] += shTrack[local_idx + 16];
-        else
-            return;
     #endif
 
     #if BSXN > 8
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 8)
             shTrack[local_idx] += shTrack[local_idx + 8];
-        else
-            return;
     #endif
 
     #if BSXN > 4
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 4)
             shTrack[local_idx] += shTrack[local_idx + 4];
-        else
-            return;
     #endif
 
     #if BSXN > 2
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 2)
             shTrack[local_idx] += shTrack[local_idx + 2];
-        else
-            return;
     #endif
 
     #if BSXN > 1
         item.barrier(sycl::access::fence_space::local_space); // avoid races between threads within the same warp
         if (local_idx < 1)
             shTrack[local_idx] += shTrack[local_idx + 1];
-        else
-            return;
     #endif
 
     // 2 - Final reduction into a global array
-    sycl::atomic<unsigned long long int>(sycl::global_ptr<unsigned long long int>(&GPU_track_sum[0])).fetch_add(shTrack[0]);
+    if(local_idx == 0)
+        sycl::atomic<unsigned long long int>(sycl::global_ptr<unsigned long long int>(&GPU_track_sum[0])).fetch_add(shTrack[0]);
 }
 
 
@@ -469,7 +437,7 @@ void run_k_means(void) try {
 
         // Get GPU_centroidT by transposing GPU_centroid
         start = std::chrono::steady_clock::now();
-        transpose(GPU_centroidT, GPU_centroid, NbClusters_pad, NbDims_pad);
+        transpose<NbDims>(GPU_centroidT, GPU_centroid, NbClusters, NbDims);
         device_sync();
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
@@ -491,7 +459,7 @@ void run_k_means(void) try {
         Tms_init += elapsed;
 
         start = std::chrono::steady_clock::now();
-        transpose(GPU_centroid, GPU_centroidT, NbDims_pad, NbClusters_pad);
+        transpose<NbClusters>(GPU_centroid, GPU_centroidT, NbDims, NbClusters);
         device_sync();
         stop = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<float, std::milli>(stop - start).count();
@@ -546,7 +514,7 @@ void run_k_means(void) try {
         start = std::chrono::steady_clock::now();
         UpdateCentroids_Step2_Parent(GPU_package, GPU_centroidT, GPU_count, dqueue);
         device_sync();
-        transpose(GPU_centroid, GPU_centroidT, NbDims_pad, NbClusters_pad);
+        transpose<NbClusters>(GPU_centroid, GPU_centroidT, NbDims, NbClusters);
         device_sync();
 
         stop = std::chrono::steady_clock::now();
@@ -565,7 +533,7 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-
+template <int unroll_factor>
 void transpose(T_real *odata, const T_real *idata, size_t m , size_t n) {
     // size_t tile_dim = (T_TILE_DIM < m) ? T_TILE_DIM : m;
     // size_t block_rows = (T_BLOCK_ROWS < n) ? T_BLOCK_ROWS : n;
@@ -593,15 +561,17 @@ void transpose(T_real *odata, const T_real *idata, size_t m , size_t n) {
     //             odata[(y+j)*width + x] = tile[item.get_local_id(0)][item.get_local_id(1) + j];        
     //     });
     // });
-    dqueue.submit([&](sycl::handler &cgh) {
-        auto task = [=]() {
+    dqueue.submit([&](handler &h) {
+        h.single_task<Trans<unroll_factor>>([=]()[[intel::kernel_args_restrict]] {
+            const int size = m*n;
+            //#pragma unroll unroll_factor1
             for(int i{0}; i < m; i++) {
+                #pragma unroll unroll_factor
                 for(int j{0}; j < n; j++)
                     odata[j*m + i] = idata[i*n + j];
             }
-	    };
-
-	    cgh.single_task(task);
-    });
-
+            // for(int i{0}; i < m*n; i++)
+            //     odata[(m*i) - (size-1) * (int)(i/size)] = idata[i];
+        });
+  });
 }
