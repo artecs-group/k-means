@@ -31,8 +31,7 @@ CLINK = -fsycl-device-code-split=per_kernel  ${MKLROOT}/lib/intel64/libmkl_sycl.
 
 ifeq ($(DEVICE),nvidia)
   #Add oneapi path
-  ONEAPI_DIR=/media/user/b8e12bed-ceff-42c2-a0fb-4c1f513c13c6/oneAPI
-  DPCT_INCLUDE_DIR = $(ONEAPI_DIR)/dpcpp-ct/latest/include/
+  DPCT_INCLUDE_DIR = ${ONEAPI_ROOT}/dpcpp-ct/latest/include/
   DPCPP = clang++
   CFLAGS = $(OPTIMIZATION) -D$(PDEVICE) -D$(PREAL) -fsycl -fsycl-targets=nvptx64-nvidia-cuda -I${ONEMKL}/include -I$(DPCT_INCLUDE_DIR)
   CLINK = -fsycl-device-code-split=per_kernel -L${ONEMKL}/lib -lonemkl
