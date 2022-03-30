@@ -1,3 +1,6 @@
+#include <oneapi/dpl/execution>
+#include <oneapi/dpl/algorithm>
+
 #include <iostream>
 #include <random>
 #include <algorithm>
@@ -8,27 +11,31 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     _queue = _get_queue();
     
     point_size     = h_x.size();
-    std::tie (groups, group_size, work_items) = _get_group_work_items(point_size);
-
-    point_size_pad = point_size + (work_items - point_size);
     point_bytes    = point_size * sizeof(float);
     mean_bytes     = k * sizeof(float);
     sum_size       = k * point_size;
     sum_bytes      = sum_size * sizeof(float);
-    count_bytes    = sum_size * sizeof(float);
+    count_bytes    = sum_size * sizeof(int);
 
-    point_x    = malloc_device<float>(point_size_pad * sizeof(float), _queue);
-    point_y    = malloc_device<float>(point_size_pad * sizeof(float), _queue);
-    mean_x     = malloc_device<float>(mean_bytes, _queue);
-    mean_y     = malloc_device<float>(mean_bytes, _queue);
-    sum_x      = malloc_device<float>(sum_bytes, _queue);
-    sum_y      = malloc_device<float>(sum_bytes, _queue);
-    counts     = malloc_device<float>(count_bytes, _queue);
-    assigments = malloc_device<int>(point_size_pad * sizeof(int), _queue);
+    point_x        = malloc_device<float>(point_size * sizeof(float), _queue);
+    point_y        = malloc_device<float>(point_size * sizeof(float), _queue);
+    mean_x         = malloc_device<float>(mean_bytes, _queue);
+    mean_y         = malloc_device<float>(mean_bytes, _queue);
+    sum_x          = malloc_shared<float>(sum_bytes, _queue);
+    sum_y          = malloc_shared<float>(sum_bytes, _queue);
+    counts         = malloc_shared<int>(count_bytes, _queue);
+    assigments     = malloc_device<int>(point_size * sizeof(int), _queue);
+    reduction_keys = malloc_shared<int>(sum_size * sizeof(int), _queue);
+    res_keys       = malloc_shared<int>(k * sizeof(int), _queue);
+    res_count      = malloc_shared<int>(k * sizeof(int), _queue);
+    res_x          = malloc_shared<float>(k * sizeof(float), _queue);
+    res_y          = malloc_shared<float>(k * sizeof(float), _queue);
+
+    _init_keys(reduction_keys, sum_size, point_size);
 
     // init pad values
-    _queue.memset(point_x, 0, point_size_pad * sizeof(float));
-    _queue.memset(point_y, 0, point_size_pad * sizeof(float));
+    _queue.memset(point_x, 0, point_size * sizeof(float));
+    _queue.memset(point_y, 0, point_size * sizeof(float));
     _sync();
     _queue.memcpy(point_x, h_x.data(), point_bytes);
     _queue.memcpy(point_y, h_y.data(), point_bytes);
@@ -49,20 +56,35 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     _queue.memset(sum_x, 0, sum_bytes);
     _queue.memset(sum_y, 0, sum_bytes);
     _queue.memset(counts, 0, count_bytes);
-    _queue.memset(assigments, 0, point_size_pad * sizeof(int)); // potential bug: try init to -1
+    _queue.memset(assigments, 0, point_size * sizeof(int)); // potential bug: try init to -1
     _sync();
 }
 
 
+void Device::_init_keys(int* reduction_keys, int size, int range) {
+    auto policy = oneapi::dpl::execution::make_device_policy(this->_queue);
+    auto counting_begin = oneapi::dpl::counting_iterator<int>{0};
+
+    // let keys_buf contain {0, 0, ..., 1, 1, ..., k-1, k-1, ..., k, k}
+    std::transform(policy, counting_begin, counting_begin + size, reduction_keys,
+        [range](auto i) { return i / range; });
+}
+
+
 Device::~Device() {
-	if(point_x != nullptr)    free(point_x, _queue);
-	if(point_y != nullptr)    free(point_y, _queue);
-	if(mean_x != nullptr)     free(mean_x, _queue);
-	if(mean_y != nullptr)     free(mean_y, _queue);
-	if(sum_x != nullptr)      free(sum_x, _queue);
-	if(sum_y != nullptr)      free(sum_y, _queue);
-	if(counts != nullptr)     free(counts, _queue);
-    if(assigments != nullptr) free(assigments, _queue);
+	if(point_x != nullptr)        free(point_x, _queue);
+	if(point_y != nullptr)        free(point_y, _queue);
+	if(mean_x != nullptr)         free(mean_x, _queue);
+	if(mean_y != nullptr)         free(mean_y, _queue);
+	if(sum_x != nullptr)          free(sum_x, _queue);
+	if(sum_y != nullptr)          free(sum_y, _queue);
+	if(counts != nullptr)         free(counts, _queue);
+    if(assigments != nullptr)     free(assigments, _queue);
+    if(reduction_keys != nullptr) free(reduction_keys, _queue);
+    if(res_keys != nullptr)       free(res_keys, _queue);
+    if(res_count != nullptr)      free(res_count, _queue);
+    if(res_x != nullptr)          free(res_x, _queue);
+    if(res_y != nullptr)          free(res_y, _queue);
 }
 
 
@@ -84,9 +106,26 @@ sycl::queue Device::_get_queue() {
 
 
 void Device::run_k_means(int iterations) {
+    auto policy1 = oneapi::dpl::execution::make_device_policy<class reduce_x>(this->_queue);
+    auto policy2 = oneapi::dpl::execution::make_device_policy<class reduce_y>(this->_queue);
+    auto policy3 = oneapi::dpl::execution::make_device_policy<class reduce_count>(this->_queue);
     for (size_t i{0}; i < iterations; ++i) {
+        // 1º Assign each point to a cluster
         _assign_clusters();
-        _manage_reduction();
+        _sync();
+
+        // 2º apply reductions over vectors, to calculate how much points are by cluster 
+        oneapi::dpl::reduce_by_segment(policy1, this->reduction_keys, this->reduction_keys + this->sum_size, 
+            this->sum_x, this->res_keys, this->res_x, std::equal_to<float>(),std::plus<float>());
+
+        oneapi::dpl::reduce_by_segment(policy2, this->reduction_keys, this->reduction_keys + this->sum_size, 
+            this->sum_y, this->res_keys, this->res_y, std::equal_to<float>(),std::plus<float>());
+
+        oneapi::dpl::reduce_by_segment(policy3, this->reduction_keys, this->reduction_keys + this->sum_size, 
+            this->counts, this->res_keys, this->res_count, std::equal_to<int>(),std::plus<int>());
+        _sync();
+
+        // 3º Calculate the new means for each cluster
         _compute_mean();
     }
     _sync();
@@ -137,7 +176,7 @@ void Device::_assign_clusters() {
         float* mean_y = this->mean_y;
         float* sum_x = this->sum_x;
         float* sum_y = this->sum_y;
-        float* counts = this->counts;
+        int* counts = this->counts;
         int* assigments = this->assigments;
 
         h.parallel_for<class assign_clusters>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
@@ -170,72 +209,20 @@ void Device::_assign_clusters() {
 }
 
 
-void Device::_reduce(float* vec) {
-    _queue.submit([&](handler& h) {
-        int point_size = this->point_size;
-        int group_size = this->group_size;
-        int k = this->k;
-        int s_size = group_size * sizeof(float);
-        sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
-
-        h.parallel_for<class reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
-            const int global_index = item.get_global_id(0);
-            const int local_index  = item.get_local_id(0);
-            const int x            = local_index;
-
-            for (int cluster = 0; cluster < k; ++cluster) {
-                // load by cluster
-                shared_data[x] = vec[point_size * cluster + global_index];
-                item.barrier(sycl::access::fence_space::local_space);
-
-                // apply reduction
-                for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
-                    if (local_index < stride)
-                        shared_data[x] += shared_data[x + stride];
-
-                    item.barrier(sycl::access::fence_space::local_space);
-                }
-
-                if (local_index == 0) {  
-                    const int cluster_index = point_size * cluster + item.get_group_linear_id();
-                    vec[cluster_index]      = shared_data[x];
-                }
-            }
-        });
-    });
-}
-
-
-void Device::_manage_reduction() {
-    int elements{point_size};
-    std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
-
-    while (elements > k) {
-        _reduce(this->sum_x);
-        _reduce(this->sum_y);
-        _reduce(this->counts);
-        _sync();
-        elements = groups*k;
-        std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
-    }
-}
-
-
 void Device::_compute_mean() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(k);
     _queue.submit([&](handler& h) {
-        int point_size = this->point_size;
-        float* counts = this->counts;
+        int* counts = this->res_count;
         float* mean_x = this->mean_x;
         float* mean_y = this->mean_y;
-        float* sum_x = this->sum_x;
-        float* sum_y = this->sum_y;
+        float* sum_x = this->res_x;
+        float* sum_y = this->res_y;
 
         h.parallel_for<class compute_mean>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
-            const int count        = (int)(1 < counts[point_size * global_index]) ? counts[point_size * global_index] : 1;
-            mean_x[global_index]   = sum_x[point_size * global_index] / count;
-            mean_y[global_index]   = sum_y[point_size * global_index] / count;
+            const int count        = (1 < counts[global_index]) ? counts[global_index] : 1;
+            mean_x[global_index]   = sum_x[global_index] / count;
+            mean_y[global_index]   = sum_y[global_index] / count;
         });
     });
 }

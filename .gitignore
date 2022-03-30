@@ -2,3 +2,4 @@
 .vscode/
 k_means
 __pycache__
+*.txt

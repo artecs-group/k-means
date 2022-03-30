@@ -1,4 +1,5 @@
 DEVICE = cpu # {cpu, nvidia, igpu}
+DEBUG = no #{yes, no}
 
 CPU = CPU_DEVICE
 IGPU = INTEL_GPU_DEVICE
@@ -13,12 +14,18 @@ else ifeq ($(DEVICE), igpu)
 endif
 
 CC = dpcpp
-CFLAGS = -D$(PDEVICE) -fsycl -O3 
+CFLAGS = -D$(PDEVICE) -fsycl
 CLINK = -fsycl-device-code-split=per_kernel
 
 ifeq ($(PDEVICE),NVIDIA_DEVICE)
 	CC = clang++
-	CFLAGS += -fsycl-targets=nvptx64-nvidia-cuda
+	CFLAGS += -fsycl-targets=nvptx64-nvidia-cuda -I"${ONEAPI_ROOT}/dpl/latest/linux/include/" -I"${ONEAPI_ROOT}/tbb/latest/include/"
+endif
+
+ifeq ($(DEBUG),yes)
+	CFLAGS += -g -O0
+else
+  CFLAGS += -O3
 endif
 
 main: ./device/device.o main.o
@@ -35,6 +42,4 @@ run: main
 
 .PHONY: clean
 clean:
-	rm -f k_means \
-	*.o \
-	./device/*.o
+	rm -f k_means *.o ./device/*.o
