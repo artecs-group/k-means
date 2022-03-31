@@ -21,7 +21,7 @@ ifeq ($(PDEVICE),NVIDIA_DEVICE)
 	CFLAGS += -fsycl-targets=nvptx64-nvidia-cuda
 endif
 
-main: ./device/device.o main.o
+k_means: ./device/device.o main.o
 	$(CC) $(CFLAGS) $(CLINK) main.o ./device/device.o -o k_means
 
 main.o: ./device/device.o
@@ -30,7 +30,7 @@ main.o: ./device/device.o
 ./device/device.o: ./device/device.hpp
 	$(CC) $(CFLAGS) ./device/device.cpp -c -o ./device/device.o
 
-run: main
+run: k_means
 	./k_means ../data/100k.csv 4 100000 300
 
 .PHONY: clean
