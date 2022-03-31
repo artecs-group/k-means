@@ -25,11 +25,11 @@ Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
     sum_y          = malloc_shared<float>(sum_bytes, _queue);
     counts         = malloc_shared<int>(count_bytes, _queue);
     assigments     = malloc_device<int>(point_size * sizeof(int), _queue);
-    reduction_keys = malloc_shared<int>(sum_size * sizeof(int), _queue);
-    res_keys       = malloc_shared<int>(k * sizeof(int), _queue);
-    res_count      = malloc_shared<int>(k * sizeof(int), _queue);
-    res_x          = malloc_shared<float>(k * sizeof(float), _queue);
-    res_y          = malloc_shared<float>(k * sizeof(float), _queue);
+    reduction_keys = malloc_device<int>(sum_size * sizeof(int), _queue);
+    res_keys       = malloc_device<int>(k * sizeof(int), _queue);
+    res_count      = malloc_device<int>(k * sizeof(int), _queue);
+    res_x          = malloc_device<float>(k * sizeof(float), _queue);
+    res_y          = malloc_device<float>(k * sizeof(float), _queue);
 
     _init_keys(reduction_keys, sum_size, point_size);
 
