@@ -107,12 +107,11 @@ sycl::queue Device::_get_queue() {
 
 void Device::run_k_means(int iterations) {
     auto policy1 = oneapi::dpl::execution::make_device_policy<class reduce_x>(this->_queue);
-    auto policy2 = oneapi::dpl::execution::make_device_policy<class reduce_y>(this->_queue);
-    auto policy3 = oneapi::dpl::execution::make_device_policy<class reduce_count>(this->_queue);
+    auto policy2 = oneapi::dpl::execution::make_device_policy<class reduce_y>(policy1);
+    auto policy3 = oneapi::dpl::execution::make_device_policy<class reduce_count>(policy1);
     for (size_t i{0}; i < iterations; ++i) {
         // 1º Assign each point to a cluster
         _assign_clusters();
-        _sync();
 
         // 2º apply reductions over vectors, to calculate how much points are by cluster 
         oneapi::dpl::reduce_by_segment(policy1, this->reduction_keys, this->reduction_keys + this->sum_size, 
@@ -123,7 +122,6 @@ void Device::run_k_means(int iterations) {
 
         oneapi::dpl::reduce_by_segment(policy3, this->reduction_keys, this->reduction_keys + this->sum_size, 
             this->counts, this->res_keys, this->res_count, std::equal_to<int>(),std::plus<int>());
-        _sync();
 
         // 3º Calculate the new means for each cluster
         _compute_mean();
