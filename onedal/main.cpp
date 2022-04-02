@@ -61,7 +61,13 @@ int main(int argc, const char* argv[]) {
     const auto k = std::atoi(argv[2]);
     const auto number_of_iterations = (argc == 4) ? std::atoi(argv[3]) : 300;
 
-    auto queue = sycl::queue{sycl::cpu_selector{}};
+#if defined(GPU_DEVICE)
+    sycl::gpu_selector selector{};
+#else
+	sycl::cpu_selector selector{};
+#endif
+
+    auto queue = sycl::queue{selector};
     std::cout << "Running on " << queue.get_device().get_info<sycl::info::device::name>() << std::endl;
     const auto data = oneapi::dal::read<oneapi::dal::table>(queue, oneapi::dal::csv::data_source{file_name});
 
