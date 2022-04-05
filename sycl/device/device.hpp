@@ -37,16 +37,15 @@ class IntelGpuSelector : public cl::sycl::device_selector {
 
 class Device {
     public:
-        float *point_x{nullptr}, *point_y{nullptr}, *mean_x{nullptr}, *mean_y{nullptr}, 
-            *sum_x{nullptr}, *sum_y{nullptr}, *counts{nullptr};
+        float *attributes{nullptr}, *mean{nullptr}, *sum{nullptr}, *counts{nullptr};
         int* assigments{nullptr};
-        int k{0}, point_size{0}, point_bytes{0}, mean_bytes{0}, sum_size{0}, sum_bytes{0}, 
-            count_bytes{0}, point_size_pad{0}, group_size{0}, work_items{0}, groups{0};
+        int dims{0}, k{0}, attribute_size{0}, attribute_bytes{0}, mean_bytes{0}, sum_size{0}, sum_bytes{0}, 
+            count_bytes{0}, attribute_size_pad{0}, group_size{0}, work_items{0}, groups{0};
 
-        Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y);
+        Device(int _k, int _dims, std::vector<float>& h_attrs);
         ~Device();
         void run_k_means(int iterations);
-        void save_solution(std::vector<float>& h_mean_x, std::vector<float>& h_mean_y);
+        void save_solution(std::vector<float>& h_mean);
     private:
         sycl::queue _queue;
 
@@ -60,6 +59,6 @@ class Device {
 };
 
 
-float squared_l2_distance(float x_1, float y_1, float x_2, float y_2);
+float squared_l2_distance(float x_1, float x_2);
 
 #endif

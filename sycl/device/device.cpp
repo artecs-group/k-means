@@ -4,63 +4,53 @@
 #include <cfloat>
 #include "./device.hpp"
 
-Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
+Device::Device(int _k, int _dims, std::vector<float>& h_attrs): k(_k), dims(_dims){
     _queue = _get_queue();
     
-    point_size     = h_x.size();
-    std::tie (groups, group_size, work_items) = _get_group_work_items(point_size);
+    attribute_size     = h_attrs.size();
+    std::tie (groups, group_size, work_items) = _get_group_work_items(attribute_size);
 
-    point_size_pad = point_size + (work_items - point_size);
-    point_bytes    = point_size * sizeof(float);
-    mean_bytes     = k * sizeof(float);
-    sum_size       = k * point_size;
-    sum_bytes      = sum_size * sizeof(float);
-    count_bytes    = sum_size * sizeof(float);
+    attribute_size_pad = attribute_size + (work_items - attribute_size);
+    attribute_bytes    = attribute_size * dims * sizeof(float);
+    mean_bytes         = k * dims * sizeof(float);
+    sum_size           = k * attribute_size;
+    sum_bytes          = sum_size * dims * sizeof(float);
+    count_bytes        = sum_size * sizeof(float);
 
-    point_x    = malloc_device<float>(point_size_pad * sizeof(float), _queue);
-    point_y    = malloc_device<float>(point_size_pad * sizeof(float), _queue);
-    mean_x     = malloc_device<float>(mean_bytes, _queue);
-    mean_y     = malloc_device<float>(mean_bytes, _queue);
-    sum_x      = malloc_device<float>(sum_bytes, _queue);
-    sum_y      = malloc_device<float>(sum_bytes, _queue);
+    attributes = malloc_device<float>(attribute_size_pad * dims * sizeof(float), _queue);
+    mean       = malloc_device<float>(mean_bytes, _queue);
+    sum        = malloc_device<float>(sum_bytes, _queue);
     counts     = malloc_device<float>(count_bytes, _queue);
-    assigments = malloc_device<int>(point_size_pad * sizeof(int), _queue);
+    assigments = malloc_device<int>(attribute_size_pad * sizeof(int), _queue);
 
     // init pad values
-    _queue.memset(point_x, 0, point_size_pad * sizeof(float));
-    _queue.memset(point_y, 0, point_size_pad * sizeof(float));
+    _queue.memset(attributes, 0, attribute_size_pad * dims * sizeof(float));
     _sync();
-    _queue.memcpy(point_x, h_x.data(), point_bytes);
-    _queue.memcpy(point_y, h_y.data(), point_bytes);
+    _queue.memcpy(attributes, h_attrs.data(), attribute_bytes);
 
-    //shuffle points to random choose points
+    //shuffle attributes to random choose attributes
     std::mt19937 rng(std::random_device{}());
     rng.seed(0);
-    std::uniform_int_distribution<size_t> indices(0, h_x.size() - 1);
-    std::vector<float> h_mean_x, h_mean_y;
+    std::uniform_int_distribution<size_t> indices(0, attribute_size - 1);
+    std::vector<float> h_mean;
     for(int i{0}; i < k; i++) {
         int idx = indices(rng);
-        h_mean_x.push_back(h_x[idx]);
-        h_mean_y.push_back(h_y[idx]);
+        for(int j{0}; j < dims; j++)
+            h_mean.push_back(h_attrs[idx + j * attribute_size]);
     }
 
-    _queue.memcpy(mean_x, h_mean_x.data(), mean_bytes);
-    _queue.memcpy(mean_y, h_mean_y.data(), mean_bytes);
-    _queue.memset(sum_x, 0, sum_bytes);
-    _queue.memset(sum_y, 0, sum_bytes);
+    _queue.memcpy(mean, h_mean.data(), mean_bytes);
+    _queue.memset(sum, 0, sum_bytes);
     _queue.memset(counts, 0, count_bytes);
-    _queue.memset(assigments, 0, point_size_pad * sizeof(int)); // potential bug: try init to -1
+    _queue.memset(assigments, 0, attribute_size_pad * sizeof(int)); // potential bug: try init to -1
     _sync();
 }
 
 
 Device::~Device() {
-	if(point_x != nullptr)    free(point_x, _queue);
-	if(point_y != nullptr)    free(point_y, _queue);
-	if(mean_x != nullptr)     free(mean_x, _queue);
-	if(mean_y != nullptr)     free(mean_y, _queue);
-	if(sum_x != nullptr)      free(sum_x, _queue);
-	if(sum_y != nullptr)      free(sum_y, _queue);
+	if(attributes != nullptr)    free(attributes, _queue);
+	if(mean != nullptr)     free(mean, _queue);
+	if(sum != nullptr)      free(sum, _queue);
 	if(counts != nullptr)     free(counts, _queue);
     if(assigments != nullptr) free(assigments, _queue);
 }
@@ -126,17 +116,15 @@ void Device::_sync() {
 
 
 void Device::_assign_clusters() {
-    std::tie (groups, group_size, work_items) = _get_group_work_items(point_size);
+    std::tie (groups, group_size, work_items) = _get_group_work_items(attribute_size);
 
     _queue.submit([&](handler& h) {
-        int point_s = this-> point_size;
+        int attr_size = this-> attribute_size;
         int k = this->k;
-        float* point_x = this->point_x;
-        float* point_y = this->point_y;
-        float* mean_x = this->mean_x;
-        float* mean_y = this->mean_y;
-        float* sum_x = this->sum_x;
-        float* sum_y = this->sum_y;
+        int dims = this->dims;
+        float* attrs = this->attributes;
+        float* mean = this->mean;
+        float* sum = this->sum;
         float* counts = this->counts;
         int* assigments = this->assigments;
 
@@ -144,14 +132,15 @@ void Device::_assign_clusters() {
             const int global_index = item.get_global_id(0);
 
             // Load once here.
-            const float x_value = point_x[global_index];
-            const float y_value = point_y[global_index];
+            const float x_value = attribute_x[global_index];
+            const float y_value = attribute_y[global_index];
 
-            float best_distance = FLT_MAX;
-            int best_cluster = -1;
+            float best_distance{FLT_MAX};
+            int best_cluster{-1};
+            float distance{0};
             for (int cluster = 0; cluster < k; ++cluster) {
-                const float distance = 
-                    squared_l2_distance(x_value, y_value, mean_x[cluster], mean_y[cluster]);
+                for(int d{0}; d < dims; d++)
+                    distance += squared_l2_distance(attrs[global_index + d * attr_size], mean[cluster + d * k]);
                 
                 if (distance < best_distance) {
                     best_distance = distance;
@@ -161,9 +150,12 @@ void Device::_assign_clusters() {
             assigments[global_index] = best_cluster;
 
             for(int cluster{0}; cluster < k; cluster++) {
-                sum_x[point_s * cluster + global_index]  = (best_cluster == cluster) ? x_value : 0;
-                sum_y[point_s * cluster + global_index]  = (best_cluster == cluster) ? y_value : 0;
-                counts[point_s * cluster + global_index] = (best_cluster == cluster) ? 1 : 0;
+                for(int d{0}; d < dims; d++) {
+                    int val_id = global_index + d * attr_size;
+                    int sum_id = attr_size * cluster + val_id;
+                    sum[sum_id]  = (best_cluster == cluster) ? attrs[val_id] : 0;
+                }
+                counts[attr_size * cluster + global_index] = (best_cluster == cluster) ? 1 : 0;
             }
         });
     });
@@ -172,7 +164,7 @@ void Device::_assign_clusters() {
 
 void Device::_reduce(float* vec) {
     _queue.submit([&](handler& h) {
-        int point_size = this->point_size;
+        int attribute_size = this->attribute_size;
         int group_size = this->group_size;
         int k = this->k;
         int s_size = group_size * sizeof(float);
@@ -185,7 +177,7 @@ void Device::_reduce(float* vec) {
 
             for (int cluster = 0; cluster < k; ++cluster) {
                 // load by cluster
-                shared_data[x] = vec[point_size * cluster + global_index];
+                shared_data[x] = vec[attribute_size * cluster + global_index];
                 item.barrier(sycl::access::fence_space::local_space);
 
                 // apply reduction
@@ -197,7 +189,7 @@ void Device::_reduce(float* vec) {
                 }
 
                 if (local_index == 0) {  
-                    const int cluster_index = point_size * cluster + item.get_group_linear_id();
+                    const int cluster_index = attribute_size * cluster + item.get_group_linear_id();
                     vec[cluster_index]      = shared_data[x];
                 }
             }
@@ -207,7 +199,7 @@ void Device::_reduce(float* vec) {
 
 
 void Device::_manage_reduction() {
-    int elements{point_size};
+    int elements{attribute_size};
     std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
 
     while (elements > k) {
@@ -224,7 +216,7 @@ void Device::_manage_reduction() {
 void Device::_compute_mean() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(k);
     _queue.submit([&](handler& h) {
-        int point_size = this->point_size;
+        int attribute_size = this->attribute_size;
         float* counts = this->counts;
         float* mean_x = this->mean_x;
         float* mean_y = this->mean_y;
@@ -233,9 +225,9 @@ void Device::_compute_mean() {
 
         h.parallel_for<class compute_mean>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
-            const int count        = (int)(1 < counts[point_size * global_index]) ? counts[point_size * global_index] : 1;
-            mean_x[global_index]   = sum_x[point_size * global_index] / count;
-            mean_y[global_index]   = sum_y[point_size * global_index] / count;
+            const int count        = (int)(1 < counts[attribute_size * global_index]) ? counts[attribute_size * global_index] : 1;
+            mean_x[global_index]   = sum_x[attribute_size * global_index] / count;
+            mean_y[global_index]   = sum_y[attribute_size * global_index] / count;
         });
     });
 }
@@ -248,8 +240,7 @@ void Device::save_solution(std::vector<float>& h_mean_x, std::vector<float>& h_m
 }
 
 
-float squared_l2_distance(float x_1, float y_1, float x_2, float y_2) {
+float squared_l2_distance(float x_1, float x_2) {
     float a = x_1 - x_2;
-    float b = y_1 - y_2;
-    return a*a + b*b;
+    return a*a;
 }
