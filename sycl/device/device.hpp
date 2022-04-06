@@ -42,7 +42,7 @@ class Device {
         int dims{0}, k{0}, attribute_size{0}, attribute_bytes{0}, mean_bytes{0}, sum_size{0}, sum_bytes{0}, 
             count_bytes{0}, attribute_size_pad{0}, group_size{0}, work_items{0}, groups{0};
 
-        Device(int _k, int _dims, std::vector<float>& h_attrs);
+        Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs);
         ~Device();
         void run_k_means(int iterations);
         void save_solution(std::vector<float>& h_mean);

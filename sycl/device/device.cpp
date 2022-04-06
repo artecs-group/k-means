@@ -4,10 +4,10 @@
 #include <cfloat>
 #include "./device.hpp"
 
-Device::Device(int _k, int _dims, std::vector<float>& h_attrs): k(_k), dims(_dims){
+Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_k), dims(_dims){
     _queue = _get_queue();
     
-    attribute_size     = h_attrs.size();
+    attribute_size     = n_attrs;
     std::tie (groups, group_size, work_items) = _get_group_work_items(attribute_size);
 
     attribute_size_pad = attribute_size + (work_items - attribute_size);
@@ -131,16 +131,12 @@ void Device::_assign_clusters() {
         h.parallel_for<class assign_clusters>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
 
-            // Load once here.
-            const float x_value = attribute_x[global_index];
-            const float y_value = attribute_y[global_index];
-
             float best_distance{FLT_MAX};
             int best_cluster{-1};
             float distance{0};
             for (int cluster = 0; cluster < k; ++cluster) {
                 for(int d{0}; d < dims; d++)
-                    distance += squared_l2_distance(attrs[global_index + d * attr_size], mean[cluster + d * k]);
+                    distance += squared_l2_distance(attrs[(d * attr_size) + global_index], mean[(cluster * dims) + d]);
                 
                 if (distance < best_distance) {
                     best_distance = distance;
@@ -151,8 +147,8 @@ void Device::_assign_clusters() {
 
             for(int cluster{0}; cluster < k; cluster++) {
                 for(int d{0}; d < dims; d++) {
-                    int val_id = global_index + d * attr_size;
-                    int sum_id = attr_size * cluster + val_id;
+                    int val_id = (d * attr_size) + global_index;
+                    int sum_id = attr_size * cluster * dims + val_id;
                     sum[sum_id]  = (best_cluster == cluster) ? attrs[val_id] : 0;
                 }
                 counts[attr_size * cluster + global_index] = (best_cluster == cluster) ? 1 : 0;
@@ -164,7 +160,8 @@ void Device::_assign_clusters() {
 
 void Device::_reduce(float* vec) {
     _queue.submit([&](handler& h) {
-        int attribute_size = this->attribute_size;
+        int dims = this->dims;
+        int attrs_size = this->attribute_size;
         int group_size = this->group_size;
         int k = this->k;
         int s_size = group_size * sizeof(float);
@@ -176,21 +173,23 @@ void Device::_reduce(float* vec) {
             const int x            = local_index;
 
             for (int cluster = 0; cluster < k; ++cluster) {
-                // load by cluster
-                shared_data[x] = vec[attribute_size * cluster + global_index];
-                item.barrier(sycl::access::fence_space::local_space);
-
-                // apply reduction
-                for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
-                    if (local_index < stride)
-                        shared_data[x] += shared_data[x + stride];
-
+                for(int d{0}; d < dims; d++) {
+                    // load by cluster
+                    shared_data[x] = vec[(attrs_size * dims * cluster) + (d * attr_size) + global_index];
                     item.barrier(sycl::access::fence_space::local_space);
-                }
 
-                if (local_index == 0) {  
-                    const int cluster_index = attribute_size * cluster + item.get_group_linear_id();
-                    vec[cluster_index]      = shared_data[x];
+                    // apply reduction
+                    for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
+                        if (local_index < stride)
+                            shared_data[x] += shared_data[x + stride];
+
+                        item.barrier(sycl::access::fence_space::local_space);
+                    }
+
+                    if (local_index == 0) {  
+                        int id = (attrs_size * cluster * dims) + (d * attr_size) + item.get_group_linear_id();
+                        vec[id]      = shared_data[x];
+                    }
                 }
             }
         });
@@ -203,8 +202,7 @@ void Device::_manage_reduction() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
 
     while (elements > k) {
-        _reduce(this->sum_x);
-        _reduce(this->sum_y);
+        _reduce(this->sum);
         _reduce(this->counts);
         _sync();
         elements = groups*k;
@@ -216,26 +214,26 @@ void Device::_manage_reduction() {
 void Device::_compute_mean() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(k);
     _queue.submit([&](handler& h) {
-        int attribute_size = this->attribute_size;
+        int dims = this->dims;
+        int attrs_size = this->attribute_size;
         float* counts = this->counts;
-        float* mean_x = this->mean_x;
-        float* mean_y = this->mean_y;
-        float* sum_x = this->sum_x;
-        float* sum_y = this->sum_y;
+        float* mean = this->mean;
+        float* sum = this->sum;
 
         h.parallel_for<class compute_mean>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
-            const int count        = (int)(1 < counts[attribute_size * global_index]) ? counts[attribute_size * global_index] : 1;
-            mean_x[global_index]   = sum_x[attribute_size * global_index] / count;
-            mean_y[global_index]   = sum_y[attribute_size * global_index] / count;
+            const int count        = (int)(1 < counts[attrs_size * global_index]) ? counts[attrs_size * global_index] : 1;
+            for(int d{0}; d < dims; d++) {
+                int id = (global_index * attrs_size * dims) + (d * attrs_size);
+                mean[global_index * dims + d] = sum[id] / count;
+            }
         });
     });
 }
 
 
 void Device::save_solution(std::vector<float>& h_mean_x, std::vector<float>& h_mean_y) {
-    _queue.memcpy(h_mean_x.data(), mean_x, mean_bytes);
-    _queue.memcpy(h_mean_y.data(), mean_y, mean_bytes);
+    _queue.memcpy(h_mean.data(), mean, mean_bytes);
     _sync();
 }
 
