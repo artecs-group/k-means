@@ -119,7 +119,7 @@ void Device::_assign_clusters() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(attribute_size);
 
     _queue.submit([&](handler& h) {
-        int attr_size = this-> attribute_size;
+        int attrs_size = this-> attribute_size;
         int k = this->k;
         int dims = this->dims;
         float* attrs = this->attributes;
@@ -136,7 +136,7 @@ void Device::_assign_clusters() {
             float distance{0};
             for (int cluster = 0; cluster < k; ++cluster) {
                 for(int d{0}; d < dims; d++)
-                    distance += squared_l2_distance(attrs[(d * attr_size) + global_index], mean[(cluster * dims) + d]);
+                    distance += squared_l2_distance(attrs[(d * attrs_size) + global_index], mean[(cluster * dims) + d]);
                 
                 if (distance < best_distance) {
                     best_distance = distance;
@@ -147,11 +147,11 @@ void Device::_assign_clusters() {
 
             for(int cluster{0}; cluster < k; cluster++) {
                 for(int d{0}; d < dims; d++) {
-                    int val_id = (d * attr_size) + global_index;
-                    int sum_id = attr_size * cluster * dims + val_id;
+                    int val_id = (d * attrs_size) + global_index;
+                    int sum_id = attrs_size * cluster * dims + val_id;
                     sum[sum_id]  = (best_cluster == cluster) ? attrs[val_id] : 0;
                 }
-                counts[attr_size * cluster + global_index] = (best_cluster == cluster) ? 1 : 0;
+                counts[attrs_size * cluster + global_index] = (best_cluster == cluster) ? 1 : 0;
             }
         });
     });
@@ -175,7 +175,7 @@ void Device::_reduce(float* vec) {
             for (int cluster = 0; cluster < k; ++cluster) {
                 for(int d{0}; d < dims; d++) {
                     // load by cluster
-                    shared_data[x] = vec[(attrs_size * dims * cluster) + (d * attr_size) + global_index];
+                    shared_data[x] = vec[(attrs_size * dims * cluster) + (d * attrs_size) + global_index];
                     item.barrier(sycl::access::fence_space::local_space);
 
                     // apply reduction
@@ -187,7 +187,7 @@ void Device::_reduce(float* vec) {
                     }
 
                     if (local_index == 0) {  
-                        int id = (attrs_size * cluster * dims) + (d * attr_size) + item.get_group_linear_id();
+                        int id = (attrs_size * cluster * dims) + (d * attrs_size) + item.get_group_linear_id();
                         vec[id]      = shared_data[x];
                     }
                 }
@@ -232,7 +232,7 @@ void Device::_compute_mean() {
 }
 
 
-void Device::save_solution(std::vector<float>& h_mean_x, std::vector<float>& h_mean_y) {
+void Device::save_solution(std::vector<float>& h_mean) {
     _queue.memcpy(h_mean.data(), mean, mean_bytes);
     _sync();
 }

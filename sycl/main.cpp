@@ -40,8 +40,11 @@ int main(int argc, const char* argv[]) {
     std::vector<float> mean(clusters*dims, 0);
     device.save_solution(mean);
 
-    for (size_t cluster = 0; cluster < clusters; ++cluster)
-        std::cout << mean_x[cluster] << " " << mean_y[cluster] << std::endl;
+    for (size_t cluster{0}; cluster < clusters; ++cluster) {
+        for(size_t d{0}; d < dims; d++)
+            std::cout << mean[cluster * dims + d] << " ";
+        std::cout << std::endl;
+    }
 
     return 0;
 }
