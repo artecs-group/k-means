@@ -31,7 +31,7 @@ main.o: ./device/device.o
 	$(CC) $(CFLAGS) ./device/device.cpp -c -o ./device/device.o
 
 run: k_means
-	./k_means ../data/100k.csv 4 100000 300
+	./k_means ../data/100k.csv 4 2 100000 300
 
 .PHONY: clean
 clean:
