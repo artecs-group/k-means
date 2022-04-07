@@ -4,6 +4,13 @@
 #include <cfloat>
 #include "./device.hpp"
 
+
+float squared_l2_distance(float x_1, float x_2) {
+    float a = x_1 - x_2;
+    return a*a;
+}
+
+
 Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_k), dims(_dims){
     _queue = _get_queue();
     
@@ -230,7 +237,7 @@ void Device::_compute_mean() {
 
         h.parallel_for<class compute_mean>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
-            const int count        = (int)(1 < counts[attrs_size * global_index]) ? counts[attrs_size * global_index] : 1;
+            const int count        = (1 < counts[attrs_size * global_index]) ? counts[attrs_size * global_index] : 1;
             for(int d{0}; d < dims; d++) {
                 int id = (global_index * attrs_size * dims) + (d * attrs_size);
                 mean[global_index * dims + d] = sum[id] / count;
@@ -243,10 +250,4 @@ void Device::_compute_mean() {
 void Device::save_solution(std::vector<float>& h_mean) {
     _queue.memcpy(h_mean.data(), mean, mean_bytes);
     _sync();
-}
-
-
-float squared_l2_distance(float x_1, float x_2) {
-    float a = x_1 - x_2;
-    return a*a;
 }

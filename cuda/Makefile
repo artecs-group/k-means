@@ -11,7 +11,7 @@ main.o: ./device/device.o
 	$(CC) $(CFLAGS) ./device/device.cu -c -o ./device/device.o
 
 run: main
-	./k_means ../data/100k.csv 4 100000 300
+	./k_means ../data/100k.csv 4 2 100000 300
 
 .PHONY: clean
 clean:

@@ -4,54 +4,58 @@
 #include <cfloat>
 #include "./device.cuh"
 
-__device__ float squared_l2_distance(float x_1, float y_1, float x_2, float y_2) {
+__device__ float squared_l2_distance(float x_1, float x_2) {
     float a = x_1 - x_2;
-    float b = y_1 - y_2;
-    return a*a + b*b;
+    return a*a;
 }
 
 
-__global__ void assign_clusters(int point_size, int k, 
-    float* __restrict__ point_x, float* __restrict__ point_y, float* __restrict__ mean_x, 
-    float* __restrict__ mean_y, float* __restrict__ sum_x, float* __restrict__ sum_y,
-    float* __restrict__ counts, int* __restrict__ assigments)
+__global__ void assign_clusters(int attrs_size, int k, int dims,
+    float* __restrict__ attrs, float* __restrict__ mean, float* __restrict__ sum,
+    unsigned int* __restrict__ counts, int* __restrict__ assigments)
 { 
     const int global_index = blockIdx.x * blockDim.x + threadIdx.x;
 
-    // Load once here.
-    const float x_value = point_x[global_index];
-    const float y_value = point_y[global_index];
-
-    float best_distance = FLT_MAX;
-    int best_cluster = -1;
+    float best_distance{FLT_MAX};
+    int best_cluster{-1};
+    float distance{0};
     for (int cluster = 0; cluster < k; ++cluster) {
-        const float distance = squared_l2_distance(x_value, y_value, mean_x[cluster], mean_y[cluster]);
+        for(int d{0}; d < dims; d++)
+            distance += squared_l2_distance(attrs[(d * attrs_size) + global_index], mean[(cluster * dims) + d]);
         
         if (distance < best_distance) {
             best_distance = distance;
             best_cluster = cluster;
         }
+        distance = 0;
     }
     assigments[global_index] = best_cluster;
 
     for(int cluster{0}; cluster < k; cluster++) {
-        sum_x[point_size * cluster + global_index]  = (best_cluster == cluster) ? x_value : 0;
-        sum_y[point_size * cluster + global_index]  = (best_cluster == cluster) ? y_value : 0;
-        counts[point_size * cluster + global_index] = (best_cluster == cluster) ? 1 : 0;
+        for(int d{0}; d < dims; d++) {
+            int val_id = (d * attrs_size) + global_index;
+            int sum_id = attrs_size * cluster * dims + val_id;
+            sum[sum_id]  = (best_cluster == cluster) ? attrs[val_id] : 0;
+        }
+        counts[attrs_size * cluster + global_index] = (best_cluster == cluster) ? 1 : 0;
     }
 }
 
 
-__global__ void reduce(int point_size, int k, float* __restrict__ vec)
+template <typename T>
+__global__ void reduce(size_t attrs_size, size_t k, size_t dims, size_t dim_offset, T* __restrict__ vec)
 {
-    extern __shared__ float shared_data[];
+    // cast in order to keep the type T
+    extern __shared__ __align__(sizeof(T)) unsigned char smem[];
+    T* shared_data = reinterpret_cast<T*>(smem);
+
     const int global_index = blockIdx.x * blockDim.x + threadIdx.x;
     const int local_index  = threadIdx.x;
     const int x            = local_index;
 
     for (int cluster = 0; cluster < k; ++cluster) {
         // load by cluster
-        shared_data[x] = vec[point_size * cluster + global_index];
+        shared_data[x] = vec[(attrs_size * cluster * dims) + global_index + dim_offset];
         __syncthreads();
 
         // apply reduction
@@ -63,81 +67,72 @@ __global__ void reduce(int point_size, int k, float* __restrict__ vec)
         }
 
         if (local_index == 0) {  
-            const int cluster_index = point_size * cluster + blockIdx.x;
+            const int cluster_index = (attrs_size * cluster * dims) + blockIdx.x + dim_offset;
             vec[cluster_index]      = shared_data[x];
         }
     }
 }
 
 
-__global__ void compute_mean(int point_size, float* __restrict__ mean_x, 
-    float* __restrict__ mean_y, float* __restrict__ sum_x, float* __restrict__ sum_y,
-    float* __restrict__ counts)
+__global__ void compute_mean(int attrs_size, int dims, float* __restrict__ mean, 
+    float* __restrict__ sum, unsigned int* __restrict__ counts)
 {
     const int global_index = blockIdx.x * blockDim.x + threadIdx.x;
-    const int count        = (int)(1 < counts[point_size * global_index]) ? counts[point_size * global_index] : 1;
-    mean_x[global_index]   = sum_x[point_size * global_index] / count;
-    mean_y[global_index]   = sum_y[point_size * global_index] / count;
+    const int count        = (1 < counts[attrs_size * global_index]) ? counts[attrs_size * global_index] : 1;
+    for(int d{0}; d < dims; d++) {
+        int id = (global_index * attrs_size * dims) + (d * attrs_size);
+        mean[global_index * dims + d] = sum[id] / count;
+    }
 }
 
 
-Device::Device(int _k, std::vector<float>& h_x, std::vector<float>& h_y): k(_k){
+Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_k), dims(_dims){
     _select_device();
     
-    point_size     = h_x.size();
-    std::tie (blocks, threads, work_items) = _get_block_threads(point_size);
+    attributes_size     = n_attrs;
+    std::tie (blocks, threads, work_items) = _get_block_threads(attributes_size);
 
-    point_size_pad = point_size + (work_items - point_size);
-    point_bytes    = point_size * sizeof(float);
-    mean_bytes     = k * sizeof(float);
-    sum_size       = k * point_size;
-    sum_bytes      = sum_size * sizeof(float);
-    count_bytes    = sum_size * sizeof(float);
+    attributes_size_pad = attributes_size + (work_items - attributes_size);
+    attributes_bytes    = attributes_size * dims * sizeof(float);
+    mean_bytes          = k * dims * sizeof(float);
+    sum_size            = k * dims * attributes_size;
+    sum_bytes           = sum_size * sizeof(float);
+    count_bytes         = k * attributes_size * sizeof(unsigned int);
 
-    cudaMalloc(&point_x, point_size_pad * sizeof(float));
-    cudaMalloc(&point_y, point_size_pad * sizeof(float));
-    cudaMalloc(&mean_x, mean_bytes);
-    cudaMalloc(&mean_y, mean_bytes);
-    cudaMalloc(&sum_x, sum_bytes);
-    cudaMalloc(&sum_y, sum_bytes);
+    cudaMalloc(&attributes, attributes_size_pad * sizeof(float));
+    cudaMalloc(&mean, mean_bytes);
+    cudaMalloc(&sum, sum_bytes);
     cudaMalloc(&counts, count_bytes);
-    cudaMalloc(&assigments, point_size_pad * sizeof(int));
+    cudaMalloc(&assigments, attributes_size_pad * sizeof(int));
 
     // init pad values
-    cudaMemset(point_x, 0, point_size_pad * sizeof(float));
-    cudaMemset(point_y, 0, point_size_pad * sizeof(float));
+    cudaMemset(attributes, 0, attributes_size_pad * dims * sizeof(float));
     _sync();
-    cudaMemcpy(point_x, h_x.data(), point_bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(point_y, h_y.data(), point_bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(attributes, h_attrs.data(), attributes_bytes, cudaMemcpyHostToDevice);
 
-    //shuffle points to random choose points
+    //shuffle attributess to random choose attributess
     std::mt19937 rng(std::random_device{}());
     rng.seed(0);
-    std::uniform_int_distribution<size_t> indices(0, h_x.size() - 1);
-    std::vector<float> h_mean_x, h_mean_y;
+    std::uniform_int_distribution<size_t> indices(0, attributes_size - 1);
+    std::vector<float> h_mean;
     for(int i{0}; i < k; i++) {
         int idx = indices(rng);
-        h_mean_x.push_back(h_x[idx]);
-        h_mean_y.push_back(h_y[idx]);
+        for(int j{0}; j < dims; j++)
+            h_mean.push_back(h_attrs[idx + j * attributes_size]);
     }
 
-    cudaMemcpy(mean_x, h_mean_x.data(), mean_bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(mean_y, h_mean_y.data(), mean_bytes, cudaMemcpyHostToDevice);
-    cudaMemset(sum_x, 0, sum_bytes);
-    cudaMemset(sum_y, 0, sum_bytes);
+    cudaMemcpy(mean, h_mean.data(), mean_bytes, cudaMemcpyHostToDevice);
+    cudaMemset(sum, 0, sum_bytes);
     cudaMemset(counts, 0, count_bytes);
-    cudaMemset(assigments, 0, point_size_pad * sizeof(int)); // potential bug: try init to -1
+    cudaMemset(assigments, 0, attributes_size_pad * sizeof(int)); // potential bug: try init to -1
     _sync();
 }
 
 
 Device::~Device() {
-	if(point_x != nullptr)    cudaFree(point_x);
-	if(point_y != nullptr)    cudaFree(point_y);
-	if(mean_x != nullptr)     cudaFree(mean_x);
-	if(mean_y != nullptr)     cudaFree(mean_y);
-	if(sum_x != nullptr)      cudaFree(sum_x);
-	if(sum_y != nullptr)      cudaFree(sum_y);
+	if(attributes != nullptr) cudaFree(attributes);
+	if(mean != nullptr)       cudaFree(mean);
+	if(sum != nullptr)        cudaFree(sum);
 	if(counts != nullptr)     cudaFree(counts);
     if(assigments != nullptr) cudaFree(assigments);
 }
@@ -188,38 +183,44 @@ void Device::_sync() {
 
 
 void Device::_assign_clusters() {
-    std::tie (blocks, threads, work_items) = _get_block_threads(point_size);
+    std::tie (blocks, threads, work_items) = _get_block_threads(attributes_size);
 
     assign_clusters<<<blocks, threads>>>(
-        point_size,
+        attributes_size,
         k,
-        point_x,
-        point_y,
-        mean_x,
-        mean_y,
-        sum_x,
-        sum_y,
+        dims,
+        attributes,
+        mean,
+        sum,
         counts,
         assigments
     );
 }
 
 
-void Device::_reduce(float* vec) {
-    int shared_size = threads * sizeof(float);
-    reduce<<<blocks, threads, shared_size>>>(point_size, k, vec);
+template <typename T>
+void Device::_reduce(T* vec, size_t _dims, size_t dim_offset) {
+    int shared_size = threads * sizeof(T);
+    reduce<<<blocks, threads, shared_size>>>(attributes_size, k, _dims, dim_offset, vec);
 }
 
 
 void Device::_manage_reduction() {
-    int elements{point_size};
+    int elements{attributes_size};
     std::tie (blocks, threads, work_items) = _get_block_threads(elements);
 
+    // iterate 'till all elements are equals to number of clusters, 
+    // which means that all the reductions are done.
     while (elements > k) {
-        _reduce(this->sum_x);
-        _reduce(this->sum_y);
-        _reduce(this->counts);
+        // reduce each dimension
+        for(int d{0}; d < dims; d++)
+            _reduce<float>(this->sum, dims, d*attributes_size);
+    
+        _reduce<unsigned int>(this->counts, 1, 0);
         _sync();
+
+        // re-calculate how many elements will need for next iteration
+        // each group will produce a partial solution of each cluster
         elements = blocks*k;
         std::tie (blocks, threads, work_items) = _get_block_threads(elements);
     }
@@ -229,18 +230,16 @@ void Device::_manage_reduction() {
 void Device::_compute_mean() {
     std::tie (blocks, threads, work_items) = _get_block_threads(k);
     compute_mean<<<blocks, threads>>>(
-        point_size,
-        mean_x,
-        mean_y,
-        sum_x,
-        sum_y,
+        attributes_size,
+        dims,
+        mean,
+        sum,
         counts
     );
 }
 
 
-void Device::save_solution(std::vector<float>& h_mean_x, std::vector<float>& h_mean_y) {
-    cudaMemcpy(h_mean_x.data(), mean_x, mean_bytes, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_mean_y.data(), mean_y, mean_bytes, cudaMemcpyDeviceToHost);
+void Device::save_solution(std::vector<float>& h_mean) {
+    cudaMemcpy(h_mean.data(), mean, mean_bytes, cudaMemcpyDeviceToHost);
     _sync();
 }
