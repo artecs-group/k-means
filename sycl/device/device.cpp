@@ -166,8 +166,8 @@ void Device::_reduce(T* vec, size_t dims, size_t dim_offset) {
         int work_items = this->work_items;
         int group_size = this->group_size;
         int k = this->k;
-        int s_size = group_size * sizeof(float);
-        sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
+        int s_size = group_size * sizeof(T);
+        sycl::accessor<T, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
 
         h.parallel_for(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
