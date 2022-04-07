@@ -13,14 +13,14 @@ Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_
     attribute_size_pad = attribute_size + (work_items - attribute_size);
     attribute_bytes    = attribute_size * dims * sizeof(float);
     mean_bytes         = k * dims * sizeof(float);
-    sum_size           = k * attribute_size;
-    sum_bytes          = sum_size * dims * sizeof(float);
-    count_bytes        = sum_size * sizeof(float);
+    sum_size           = k * dims * attribute_size;
+    sum_bytes          = sum_size * sizeof(float);
+    count_bytes        = k * attribute_size * sizeof(unsigned int);
 
     attributes = malloc_device<float>(attribute_size_pad * dims * sizeof(float), _queue);
     mean       = malloc_device<float>(mean_bytes, _queue);
     sum        = malloc_device<float>(sum_bytes, _queue);
-    counts     = malloc_device<float>(count_bytes, _queue);
+    counts     = malloc_device<unsigned int>(count_bytes, _queue);
     assigments = malloc_device<int>(attribute_size_pad * sizeof(int), _queue);
 
     // init pad values
@@ -48,9 +48,9 @@ Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_
 
 
 Device::~Device() {
-	if(attributes != nullptr)    free(attributes, _queue);
-	if(mean != nullptr)     free(mean, _queue);
-	if(sum != nullptr)      free(sum, _queue);
+	if(attributes != nullptr) free(attributes, _queue);
+	if(mean != nullptr)       free(mean, _queue);
+	if(sum != nullptr)        free(sum, _queue);
 	if(counts != nullptr)     free(counts, _queue);
     if(assigments != nullptr) free(assigments, _queue);
 }
@@ -125,7 +125,7 @@ void Device::_assign_clusters() {
         float* attrs = this->attributes;
         float* mean = this->mean;
         float* sum = this->sum;
-        float* counts = this->counts;
+        unsigned int* counts = this->counts;
         int* assigments = this->assigments;
 
         h.parallel_for<class assign_clusters>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
@@ -142,6 +142,7 @@ void Device::_assign_clusters() {
                     best_distance = distance;
                     best_cluster = cluster;
                 }
+                distance = 0;
             }
             assigments[global_index] = best_cluster;
 
@@ -158,38 +159,37 @@ void Device::_assign_clusters() {
 }
 
 
-void Device::_reduce(float* vec) {
+template <typename T>
+void Device::_reduce(T* vec, size_t dims, size_t dim_offset) {
     _queue.submit([&](handler& h) {
-        int dims = this->dims;
         int attrs_size = this->attribute_size;
+        int work_items = this->work_items;
         int group_size = this->group_size;
         int k = this->k;
         int s_size = group_size * sizeof(float);
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
 
-        h.parallel_for<class reduce>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
+        h.parallel_for(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
             const int local_index  = item.get_local_id(0);
             const int x            = local_index;
 
             for (int cluster = 0; cluster < k; ++cluster) {
-                for(int d{0}; d < dims; d++) {
-                    // load by cluster
-                    shared_data[x] = vec[(attrs_size * dims * cluster) + (d * attrs_size) + global_index];
+                // load by cluster
+                shared_data[x] = vec[(attrs_size * cluster * dims) + global_index + dim_offset];
+                item.barrier(sycl::access::fence_space::local_space);
+
+                // apply reduction
+                for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
+                    if (local_index < stride)
+                        shared_data[x] += shared_data[x + stride];
+
                     item.barrier(sycl::access::fence_space::local_space);
+                }
 
-                    // apply reduction
-                    for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
-                        if (local_index < stride)
-                            shared_data[x] += shared_data[x + stride];
-
-                        item.barrier(sycl::access::fence_space::local_space);
-                    }
-
-                    if (local_index == 0) {  
-                        int id = (attrs_size * cluster * dims) + (d * attrs_size) + item.get_group_linear_id();
-                        vec[id]      = shared_data[x];
-                    }
+                if (local_index == 0) {  
+                    int id  = (attrs_size * cluster * dims) + item.get_group_linear_id() + dim_offset;
+                    vec[id] = shared_data[x];
                 }
             }
         });
@@ -201,10 +201,18 @@ void Device::_manage_reduction() {
     int elements{attribute_size};
     std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
 
+    // iterate 'till all elements are equals to number of clusters, 
+    // which means that all the reductions are done.
     while (elements > k) {
-        _reduce(this->sum);
-        _reduce(this->counts);
+        // reduce each dimension
+        for(int d{0}; d < dims; d++)
+            _reduce<float>(this->sum, dims, d*attribute_size);
+    
+        _reduce<unsigned int>(this->counts, 1, 0);
         _sync();
+
+        // re-calculate how many elements will need for next iteration
+        // each group will produce a partial solution of each cluster
         elements = groups*k;
         std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
     }
@@ -216,7 +224,7 @@ void Device::_compute_mean() {
     _queue.submit([&](handler& h) {
         int dims = this->dims;
         int attrs_size = this->attribute_size;
-        float* counts = this->counts;
+        unsigned int* counts = this->counts;
         float* mean = this->mean;
         float* sum = this->sum;
 

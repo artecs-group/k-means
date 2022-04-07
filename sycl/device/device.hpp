@@ -37,7 +37,8 @@ class IntelGpuSelector : public cl::sycl::device_selector {
 
 class Device {
     public:
-        float *attributes{nullptr}, *mean{nullptr}, *sum{nullptr}, *counts{nullptr};
+        float *attributes{nullptr}, *mean{nullptr}, *sum{nullptr};
+        unsigned int* counts{nullptr};
         int* assigments{nullptr};
         int dims{0}, k{0}, attribute_size{0}, attribute_bytes{0}, mean_bytes{0}, sum_size{0}, sum_bytes{0}, 
             count_bytes{0}, attribute_size_pad{0}, group_size{0}, work_items{0}, groups{0};
@@ -53,7 +54,9 @@ class Device {
         void _sync();
         void _assign_clusters();
         void _manage_reduction();
-        void _reduce(float* vec);
+
+        template <typename T>
+        void _reduce(T* vec, size_t dims, size_t dim_offset);
         void _compute_mean();
         std::tuple<int,int,int> _get_group_work_items(int elements);
 };
