@@ -1,4 +1,5 @@
 DEVICE = cpu # {cpu, nvidia, igpu}
+DEBUG = no # {yes, no}
 
 CPU = CPU_DEVICE
 IGPU = INTEL_GPU_DEVICE
@@ -13,12 +14,18 @@ else ifeq ($(DEVICE), igpu)
 endif
 
 CC = dpcpp
-CFLAGS = -D$(PDEVICE) -fsycl -O3 
+CFLAGS = -D$(PDEVICE) -fsycl
 CLINK = -fsycl-device-code-split=per_kernel
 
 ifeq ($(PDEVICE),NVIDIA_DEVICE)
 	CC = clang++
 	CFLAGS += -fsycl-targets=nvptx64-nvidia-cuda
+endif
+
+ifeq ($(DEBUG),yes)
+	CFLAGS += -g -O0
+else
+	CFLAGS += -O3
 endif
 
 k_means: ./device/device.o main.o
