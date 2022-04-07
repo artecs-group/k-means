@@ -8,7 +8,7 @@ GPUCC = /usr/local/cuda/bin/nvcc
 
 CXXFLAGS = -O3 #-DDP
 CXXFLAGS += -I/usr/local/cuda/include/
-CC_CXXFLAGS = -Ofast -fopenmp -funroll-loops -march=skylake-avx512 #-march=native
+CC_CXXFLAGS = -Ofast -fopenmp -funroll-loops #-march=skylake-avx512 #-march=native
 CUDA_CXXFLAGS = $(CUDA_TARGET_FLAGS)
 
 CC_LDFLAGS =  -fopenmp 
