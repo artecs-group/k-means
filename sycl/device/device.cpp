@@ -240,7 +240,7 @@ void Device::_manage_cpu_reduction() {
         h.parallel_for(nd_range(range(dims), range(1)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
 
-            for (int cluster = 0; cluster < k; cluster++) { 
+            for (int cluster{0}; cluster < k; cluster++) { 
                 int cluster_id = (attrs_size * cluster * dims) + global_index * attrs_size;
                 
                 #pragma unroll 4
@@ -252,9 +252,10 @@ void Device::_manage_cpu_reduction() {
 
     _queue.submit([&](handler &h) {
         int attrs_size = this->attribute_size;
+        int k = this->k;
         unsigned int* vec = this->counts;
 
-        h.parallel_for(nd_range(range(cluster), range(1)), [=](nd_item<1> item){
+        h.parallel_for(nd_range(range(k), range(1)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
             const int cluster_id = (attrs_size * global_index);
             
