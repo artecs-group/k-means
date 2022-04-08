@@ -83,7 +83,11 @@ sycl::queue Device::_get_queue() {
 void Device::run_k_means(int iterations) {
     for (size_t i{0}; i < iterations; ++i) {
         _assign_clusters();
-        _manage_reduction();
+#if defined(CPU_DEVICE)
+        _manage_cpu_reduction();
+#else
+        _manage_gpu_reduction();
+#endif
         _compute_mean();
     }
     _sync();
@@ -167,7 +171,7 @@ void Device::_assign_clusters() {
 
 
 template <typename T>
-void Device::_reduce(T* vec, size_t dims, size_t dim_offset) {
+void Device::_gpu_reduce(T* vec, size_t dims, size_t dim_offset) {
     _queue.submit([&](handler& h) {
         int attrs_size = this->attribute_size;
         int work_items = this->work_items;
@@ -204,7 +208,26 @@ void Device::_reduce(T* vec, size_t dims, size_t dim_offset) {
 }
 
 
-void Device::_manage_reduction() {
+template <typename T>
+void Device::_cpu_reduce(T* vec, size_t dims, size_t dim_offset) { 
+    _queue.submit([&](handler &h) {
+        int attrs_size = this->attribute_size;
+
+        h.single_task<cpu_reduce>([=]() {
+            for (int cluster = 0; cluster < k; ++cluster) { 
+                int cluster_id = (attrs_size * cluster * dims) + dim_offset;
+                
+                //#pragma unroll 4
+                for(int i{0}; i < attrs_size; i++) {
+                    vec[cluster_id] += vec[cluster_id + i];
+                }
+            }
+        });
+  });
+}
+
+
+void Device::_manage_gpu_reduction() {
     int elements{attribute_size};
     std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
 
@@ -213,9 +236,9 @@ void Device::_manage_reduction() {
     while (elements > k) {
         // reduce each dimension
         for(int d{0}; d < dims; d++)
-            _reduce<float>(this->sum, dims, d*attribute_size);
+            _gpu_reduce<float>(this->sum, dims, d*attribute_size);
     
-        _reduce<unsigned int>(this->counts, 1, 0);
+        _gpu_reduce<unsigned int>(this->counts, 1, 0);
         _sync();
 
         // re-calculate how many elements will need for next iteration
@@ -223,6 +246,16 @@ void Device::_manage_reduction() {
         elements = groups*k;
         std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
     }
+}
+
+
+void Device::_manage_cpu_reduction() {
+    // reduce each dimension
+    for(int d{0}; d < dims; d++)
+        _cpu_reduce<float>(this->sum, dims, d*attribute_size);
+
+    _cpu_reduce<unsigned int>(this->counts, 1, 0);
+    _sync();
 }
 
 

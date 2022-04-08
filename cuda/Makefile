@@ -1,5 +1,13 @@
+DEBUG = no # {yes, no}
+
 CC = nvcc
-CFLAGS = -std=c++17 -O3
+CFLAGS = -std=c++17
+
+ifeq ($(DEBUG),yes)
+	CFLAGS += -g -G -O0
+else
+	CFLAGS += -O3
+endif
 
 main: ./device/device.o main.o
 	$(CC) $(CFLAGS) main.o ./device/device.o -o k_means

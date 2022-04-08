@@ -54,10 +54,15 @@ class Device {
         sycl::queue _get_queue();
         void _sync();
         void _assign_clusters();
-        void _manage_reduction();
+        void _manage_cpu_reduction();
+        void _manage_gpu_reduction();
 
         template <typename T>
-        void _reduce(T* vec, size_t dims, size_t dim_offset);
+        void _gpu_reduce(T* vec, size_t dims, size_t dim_offset);
+
+        template <typename T>
+        void _cpu_reduce(T* vec, size_t dims, size_t dim_offset);
+
         void _compute_mean();
         std::tuple<int,int,int> _get_group_work_items(int elements);
 };
