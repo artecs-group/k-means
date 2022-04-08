@@ -59,10 +59,6 @@ class Device {
 
         template <typename T>
         void _gpu_reduce(T* vec, size_t dims, size_t dim_offset);
-
-        template <typename T>
-        void _cpu_reduce(T* vec, size_t dims, size_t dim_offset);
-
         void _compute_mean();
         std::tuple<int,int,int> _get_group_work_items(int elements);
 };

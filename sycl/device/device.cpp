@@ -208,26 +208,6 @@ void Device::_gpu_reduce(T* vec, size_t dims, size_t dim_offset) {
 }
 
 
-template <typename T>
-void Device::_cpu_reduce(T* vec, size_t dims, size_t dim_offset) { 
-    _queue.submit([&](handler &h) {
-        int attrs_size = this->attribute_size;
-        int k = this->k;
-
-        h.single_task([=]() {
-            for (int cluster = 0; cluster < k; ++cluster) { 
-                int cluster_id = (attrs_size * cluster * dims) + dim_offset;
-                
-                //#pragma unroll 4
-                for(int i{0}; i < attrs_size; i++) {
-                    vec[cluster_id] += vec[cluster_id + i];
-                }
-            }
-        });
-  });
-}
-
-
 void Device::_manage_gpu_reduction() {
     int elements{attribute_size};
     std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
@@ -251,11 +231,38 @@ void Device::_manage_gpu_reduction() {
 
 
 void Device::_manage_cpu_reduction() {
-    // reduce each dimension
-    for(int d{0}; d < dims; d++)
-        _cpu_reduce<float>(this->sum, dims, d*attribute_size);
+    _queue.submit([&](handler &h) {
+        int attrs_size = this->attribute_size;
+        int k = this->k;
+        int dims = this->dims;
+        float* vec = this->sum;
 
-    _cpu_reduce<unsigned int>(this->counts, 1, 0);
+        h.parallel_for(nd_range(range(dims), range(1)), [=](nd_item<1> item){
+            const int global_index = item.get_global_id(0);
+
+            for (int cluster = 0; cluster < k; cluster++) { 
+                int cluster_id = (attrs_size * cluster * dims) + global_index * attrs_size;
+                
+                #pragma unroll 4
+                for(int i{0}; i < attrs_size; i++)
+                    vec[cluster_id] += vec[cluster_id + i];
+            }
+        });
+    });
+
+    _queue.submit([&](handler &h) {
+        int attrs_size = this->attribute_size;
+        unsigned int* vec = this->counts;
+
+        h.parallel_for(nd_range(range(cluster), range(1)), [=](nd_item<1> item){
+            const int global_index = item.get_global_id(0);
+            const int cluster_id = (attrs_size * global_index);
+            
+            #pragma unroll 4
+            for(int i{0}; i < attrs_size; i++)
+                vec[cluster_id] += vec[cluster_id + i];
+        });
+    });
     _sync();
 }
 
