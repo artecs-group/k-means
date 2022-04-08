@@ -2,6 +2,7 @@
 #include <random>
 #include <algorithm>
 #include <cfloat>
+#include <chrono>
 #include "./device.hpp"
 
 
@@ -81,16 +82,36 @@ sycl::queue Device::_get_queue() {
 
 
 void Device::run_k_means(int iterations) {
+    std::chrono::time_point<std::chrono::high_resolution_clock> start, end;
+    float t_assign{0}, t_reduction{0}, t_mean{0};
     for (size_t i{0}; i < iterations; ++i) {
-        _assign_clusters();
+        start = std::chrono::high_resolution_clock::now();
+        _assign_clusters(); 
+        _sync();
+        end = std::chrono::high_resolution_clock::now();
+        t_assign += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
+
+        start = std::chrono::high_resolution_clock::now();
 #if defined(CPU_DEVICE)
         _manage_cpu_reduction();
 #else
         _manage_gpu_reduction();
 #endif
+        _sync();
+        end = std::chrono::high_resolution_clock::now();
+        t_reduction += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
+
+        start = std::chrono::high_resolution_clock::now();
         _compute_mean();
+        _sync();
+        end = std::chrono::high_resolution_clock::now();
+        t_mean += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
     }
-    _sync();
+    double total = t_assign + t_reduction + t_mean;
+    std::cout << std::endl << "Kernel time: " << std::endl
+              << "  * Assign Clusters = " << t_assign << " (s) -> " << t_assign/total*100 << "%" << std::endl
+              << "  * Reduction       = " << t_reduction << " (s) -> " << t_reduction/total*100 << "%" << std::endl
+              << "  * Mean            = " << t_mean << " (s) -> " << t_mean/total*100 << "%" << std::endl;
 }
 
 
@@ -231,21 +252,26 @@ void Device::_manage_gpu_reduction() {
 
 
 void Device::_manage_cpu_reduction() {
+    const size_t CUs = _queue.get_device().get_info<cl::sycl::info::device::max_compute_units>();
+    const int attrs_per_CU = attribute_size_pad / CUs; // assure CUs is 2 multiple
+
     _queue.submit([&](handler &h) {
         int attrs_size = this->attribute_size;
         int k = this->k;
         int dims = this->dims;
         float* vec = this->sum;
 
-        h.parallel_for(nd_range(range(dims), range(1)), [=](nd_item<1> item){
-            const int global_index = item.get_global_id(0);
+        h.parallel_for(nd_range(range(CUs), range(1)), [=](nd_item<1> item){
+            const int attr_start_idx = attrs_per_CU * item.get_global_id(0);
 
-            for (int cluster{0}; cluster < k; cluster++) { 
-                int cluster_id = (attrs_size * cluster * dims) + global_index * attrs_size;
-                
-                #pragma unroll 4
-                for(int i{0}; i < attrs_size; i++)
-                    vec[cluster_id] += vec[cluster_id + i];
+            for (int cluster{0}; cluster < k; cluster++) {
+                for(int d{0}; d < dims; d++) {
+                    int cluster_id = (attrs_size * cluster * dims) + d * attrs_size;
+                    
+                    #pragma unroll 4
+                    for(int i{attr_start_idx}; i < attr_start_idx + attrs_per_CU; i++)
+                        vec[cluster_id] += vec[cluster_id + i];
+                }
             }
         });
     });
@@ -255,16 +281,43 @@ void Device::_manage_cpu_reduction() {
         int k = this->k;
         unsigned int* vec = this->counts;
 
-        h.parallel_for(nd_range(range(k), range(1)), [=](nd_item<1> item){
-            const int global_index = item.get_global_id(0);
-            const int cluster_id = (attrs_size * global_index);
+        h.parallel_for(nd_range(range(CUs), range(1)), [=](nd_item<1> item){
+            const int attr_start_idx = attrs_per_CU * item.get_global_id(0);
             
-            #pragma unroll 4
-            for(int i{0}; i < attrs_size; i++)
-                vec[cluster_id] += vec[cluster_id + i];
+            for(int cluster{0}; cluster < k; cluster++){
+                int cluster_id = (attrs_size * cluster);
+
+                #pragma unroll 4
+                for(int i{attr_start_idx}; i < attr_start_idx + attrs_per_CU; i++)
+                    vec[cluster_id + attr_start_idx] += vec[cluster_id + i];
+            }
         });
     });
+
     _sync();
+
+    // reduce all previous reductions
+    _queue.submit([&](handler &h) {
+        int attrs_size = this->attribute_size;
+        int k = this->k;
+        int dims = this->dims;
+        unsigned int* counts = this->counts;
+        float* sum = this->sum;
+
+        h.single_task([=]() {
+            for(int cluster{0}; cluster < k; cluster++){
+                int cluster_id = (attrs_size * cluster);
+                for(int i{0}; i < attrs_size; i += attrs_per_CU)
+                    counts[cluster_id] += counts[cluster_id + i];
+
+                for(int d{0}; d < dims; d++) {
+                    int dim_id = (attrs_size * cluster * dims) + d * attrs_size;
+                    for(int i{0}; i < attrs_size; i += attrs_per_CU)
+                        sum[dim_id] += sum[dim_id + i];
+                }
+            }
+        });
+    });
 }
 
 
