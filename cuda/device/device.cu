@@ -148,10 +148,12 @@ void Device::_select_device() {
 void Device::run_k_means(int iterations) {
     for (size_t i{0}; i < iterations; ++i) {
         _assign_clusters();
+        _sync();
         _manage_reduction();
+        _sync();
         _compute_mean();
+        _sync();
     }
-    _sync();
 }
 
 
