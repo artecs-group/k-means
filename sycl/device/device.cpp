@@ -213,7 +213,7 @@ void Device::_cpu_reduce(T* vec, size_t dims, size_t dim_offset) {
     _queue.submit([&](handler &h) {
         int attrs_size = this->attribute_size;
 
-        h.single_task<cpu_reduce>([=]() {
+        h.single_task([=]() {
             for (int cluster = 0; cluster < k; ++cluster) { 
                 int cluster_id = (attrs_size * cluster * dims) + dim_offset;
                 
