@@ -162,6 +162,10 @@ void cpuKmeans(void)
                 //printf("Track = %llu  Tolerance = %lf\n", track, tolerance); 
             }
         } while (NbIters < MaxNbIters);
+<<<<<<< HEAD
+=======
+        //} while (tolerance > TOL && NbIters < MaxNbIters);
+>>>>>>> 9cf84fc83c36a1223a998dd1a21546c7bb715f69
 
         // Store the elapsed time in ms in global variables
         #pragma omp single
