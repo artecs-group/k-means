@@ -178,10 +178,11 @@ void Device::_assign_clusters() {
             }
             assigments[global_index] = best_cluster;
 
+            int val_id{0}, sum_id{0};
             for(int cluster{0}; cluster < k; cluster++) {
                 for(int d{0}; d < dims; d++) {
-                    int val_id = (d * attrs_size) + global_index;
-                    int sum_id = attrs_size * cluster * dims + val_id;
+                    val_id       = (d * attrs_size) + global_index;
+                    sum_id       = attrs_size * cluster * dims + val_id;
                     sum[sum_id]  = (best_cluster == cluster) ? attrs[val_id] : 0;
                 }
                 counts[attrs_size * cluster + global_index] = (best_cluster == cluster) ? 1 : 0;
@@ -206,17 +207,15 @@ void Device::_gpu_reduce(T* vec, size_t dims, size_t dim_offset) {
             const int local_index  = item.get_local_id(0);
             const int x            = local_index;
 
-            for (int cluster = 0; cluster < k; ++cluster) {
+            for (int cluster = 0; cluster < k; cluster++) {
                 // load by cluster
                 shared_data[x] = vec[(attrs_size * cluster * dims) + global_index + dim_offset];
-                item.barrier(sycl::access::fence_space::local_space);
 
-                // apply reduction
+                // tree reduction
                 for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
+                    item.barrier(sycl::access::fence_space::local_space);
                     if (local_index < stride)
                         shared_data[x] += shared_data[x + stride];
-
-                    item.barrier(sycl::access::fence_space::local_space);
                 }
 
                 if (local_index == 0) {  
@@ -259,43 +258,31 @@ void Device::_manage_cpu_reduction() {
         int attrs_size = this->attribute_size;
         int k = this->k;
         int dims = this->dims;
-        float* vec = this->sum;
+        float* sum = this->sum;
+        unsigned int* count = this->counts;
 
         h.parallel_for(nd_range(range(CUs), range(1)), [=](nd_item<1> item){
             const int attr_start_idx = attrs_per_CU * item.get_global_id(0);
+            int cluster_id{0}, sum_id{0}, count_id{0};
 
             for (int cluster{0}; cluster < k; cluster++) {
-                for(int d{0}; d < dims; d++) {
-                    int cluster_id = (attrs_size * cluster * dims) + d * attrs_size;
-                    
-                    #pragma unroll 4
-                    for(int i{attr_start_idx}; i < attr_start_idx + attrs_per_CU; i++)
-                        vec[cluster_id] += vec[cluster_id + i];
+                count_id = (attrs_size * cluster) + attr_start_idx;
+
+                for(int i{1}; i < attrs_per_CU; i++) {
+                    count[count_id] += count[count_id + i];
+
+                    for(int d{0}; d < dims; d++) {
+                        cluster_id   = (attrs_size * cluster * dims) + d * attrs_size;
+                        sum_id       = cluster_id + attr_start_idx;
+                        sum[sum_id] += sum[sum_id + i];
+                    }
                 }
             }
         });
     });
-
-    _queue.submit([&](handler &h) {
-        int attrs_size = this->attribute_size;
-        int k = this->k;
-        unsigned int* vec = this->counts;
-
-        h.parallel_for(nd_range(range(CUs), range(1)), [=](nd_item<1> item){
-            const int attr_start_idx = attrs_per_CU * item.get_global_id(0);
-            
-            for(int cluster{0}; cluster < k; cluster++){
-                int cluster_id = (attrs_size * cluster);
-
-                #pragma unroll 4
-                for(int i{attr_start_idx}; i < attr_start_idx + attrs_per_CU; i++)
-                    vec[cluster_id + attr_start_idx] += vec[cluster_id + i];
-            }
-        });
-    });
-
     _sync();
 
+    // serial reduction
     // reduce all previous reductions
     _queue.submit([&](handler &h) {
         int attrs_size = this->attribute_size;
@@ -305,15 +292,17 @@ void Device::_manage_cpu_reduction() {
         float* sum = this->sum;
 
         h.single_task([=]() {
-            for(int cluster{0}; cluster < k; cluster++){
-                int cluster_id = (attrs_size * cluster);
-                for(int i{0}; i < attrs_size; i += attrs_per_CU)
-                    counts[cluster_id] += counts[cluster_id + i];
+            int cluster_id{0}, dim_id{0};
 
-                for(int d{0}; d < dims; d++) {
-                    int dim_id = (attrs_size * cluster * dims) + d * attrs_size;
-                    for(int i{0}; i < attrs_size; i += attrs_per_CU)
+            for(int cluster{0}; cluster < k; cluster++){
+                cluster_id = (attrs_size * cluster);
+                for(int i{attrs_per_CU}; i < attrs_size; i += attrs_per_CU) {
+                    counts[cluster_id] += counts[cluster_id + i];
+                    
+                    for(int d{0}; d < dims; d++) {
+                        dim_id       = (attrs_size * cluster * dims) + d * attrs_size;
                         sum[dim_id] += sum[dim_id + i];
+                    }
                 }
             }
         });

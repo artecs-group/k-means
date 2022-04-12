@@ -2,6 +2,7 @@
 #include <random>
 #include <algorithm>
 #include <cfloat>
+#include <chrono>
 #include "./device.cuh"
 
 __device__ float squared_l2_distance(float x_1, float x_2) {
@@ -45,7 +46,7 @@ __global__ void assign_clusters(int attrs_size, int k, int dims,
 template <typename T>
 __global__ void reduce(size_t attrs_size, size_t k, size_t dims, size_t dim_offset, T* __restrict__ vec)
 {
-    // cast in order to keep the type T
+    // cast in order to keep the T type
     extern __shared__ __align__(sizeof(T)) unsigned char smem[];
     T* shared_data = reinterpret_cast<T*>(smem);
 
@@ -53,22 +54,20 @@ __global__ void reduce(size_t attrs_size, size_t k, size_t dims, size_t dim_offs
     const int local_index  = threadIdx.x;
     const int x            = local_index;
 
-    for (int cluster = 0; cluster < k; ++cluster) {
+    for (int cluster = 0; cluster < k; cluster++) {
         // load by cluster
         shared_data[x] = vec[(attrs_size * cluster * dims) + global_index + dim_offset];
-        __syncthreads();
 
-        // apply reduction
+        // tree reduction
         for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+            __syncthreads();
             if (local_index < stride)
                 shared_data[x] += shared_data[x + stride];
-
-            __syncthreads();
         }
 
         if (local_index == 0) {  
-            const int cluster_index = (attrs_size * cluster * dims) + blockIdx.x + dim_offset;
-            vec[cluster_index]      = shared_data[x];
+            int cluster_index  = (attrs_size * cluster * dims) + blockIdx.x + dim_offset;
+            vec[cluster_index] = shared_data[x];
         }
     }
 }
@@ -146,14 +145,34 @@ void Device::_select_device() {
 
 
 void Device::run_k_means(int iterations) {
+    std::chrono::time_point<std::chrono::high_resolution_clock> start, end;
+    float t_assign{0}, t_reduction{0}, t_mean{0};
+
     for (size_t i{0}; i < iterations; ++i) {
+        start = std::chrono::high_resolution_clock::now();
         _assign_clusters();
         _sync();
+        end = std::chrono::high_resolution_clock::now();
+        t_assign += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
+
+        start = std::chrono::high_resolution_clock::now();
         _manage_reduction();
         _sync();
+        end = std::chrono::high_resolution_clock::now();
+        t_reduction += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
+
+        start = std::chrono::high_resolution_clock::now();
         _compute_mean();
         _sync();
+        end = std::chrono::high_resolution_clock::now();
+        t_mean += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
     }
+
+    double total = t_assign + t_reduction + t_mean;
+    std::cout << std::endl << "Kernel time: " << std::endl
+              << "  * Assign Clusters = " << t_assign << " (s) -> " << t_assign/total*100 << "%" << std::endl
+              << "  * Reduction       = " << t_reduction << " (s) -> " << t_reduction/total*100 << "%" << std::endl
+              << "  * Mean            = " << t_mean << " (s) -> " << t_mean/total*100 << "%" << std::endl;
 }
 
 
