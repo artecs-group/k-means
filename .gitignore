@@ -1,5 +1,6 @@
 *.o
 .vscode/
 k_means
+kmeans
 __pycache__
 *.txt
