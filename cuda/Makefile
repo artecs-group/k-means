@@ -1,4 +1,4 @@
-CPUCC = g++
+CPUCC = icpx
 GPUCC = /usr/local/cuda/bin/nvcc   
 
 # For RTX 2080 Ti
@@ -8,10 +8,11 @@ GPUCC = /usr/local/cuda/bin/nvcc
 
 CXXFLAGS = -O3 #-DDP
 CXXFLAGS += -I/usr/local/cuda/include/
-CC_CXXFLAGS = -Ofast -fopenmp -funroll-loops -march=skylake-avx512 #-march=native
+#CC_CXXFLAGS = -Ofast -fopenmp -funroll-loops -march=skylake-avx512 #-march=native
+CC_CXXFLAGS = -xhost -qopenmp
 CUDA_CXXFLAGS = $(CUDA_TARGET_FLAGS)
 
-CC_LDFLAGS =  -fopenmp 
+CC_LDFLAGS =  -qopenmp 
 CUDA_LDFLAGS = -L/usr/local/cuda/lib64/ 
 
 CC_LIBS = -lopenblas

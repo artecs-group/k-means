@@ -2,7 +2,7 @@
 /* Define constants                                                                        */
 /*-----------------------------------------------------------------------------------------*/
 // Benchmark dataset
-#define NbPoints    100000      // Number of data instances
+#define NbPoints    200000      // Number of data instances
 #define NbDims      2             // Number of dimensions
 #define NbClusters  4             // Number of clusters
 #define NbPackages  100           // Number of packages used for UpdateCentroids
