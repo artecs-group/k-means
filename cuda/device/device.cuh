@@ -5,6 +5,9 @@
 #include <tuple>
 #include <string>
 
+#define THREADS_EU 1
+#define EUs_SUBSLICE_NVIDIA_PASCAL 128
+
 class Device {
     public:
         Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs);
@@ -23,10 +26,7 @@ class Device {
         void _select_device();
         void _sync();
         void _assign_clusters();
-        void _manage_reduction();
-
-        template <typename T>
-        void _reduce(T* vec, size_t _dims, size_t dim_offset);
+        void _reduction();
         void _compute_mean();
         std::tuple<int,int,int> _get_block_threads(int elements);
 };

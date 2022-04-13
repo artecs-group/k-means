@@ -6,6 +6,11 @@
 #include <string>
 #include <CL/sycl.hpp>
 
+#define THREADS_EU 1
+#define EUs_SUBSLICE_INTEL_GEN9 8
+#define EUs_SUBSLICE_INTEL_GEN12 16
+#define EUs_SUBSLICE_NVIDIA_PASCAL 128
+
 using namespace cl::sycl;
 
 // CUDA GPU selector
@@ -54,11 +59,8 @@ class Device {
         sycl::queue _get_queue();
         void _sync();
         void _assign_clusters();
-        void _manage_cpu_reduction();
-        void _manage_gpu_reduction();
-
-        template <typename T>
-        void _gpu_reduce(T* vec, size_t dims, size_t dim_offset);
+        void _cpu_reduction();
+        void _gpu_reduction();
         void _compute_mean();
         std::tuple<int,int,int> _get_group_work_items(int elements);
 };

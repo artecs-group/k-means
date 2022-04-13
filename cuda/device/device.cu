@@ -43,32 +43,42 @@ __global__ void assign_clusters(int attrs_size, int k, int dims,
 }
 
 
-template <typename T>
-__global__ void reduce(size_t attrs_size, size_t k, size_t dims, size_t dim_offset, T* __restrict__ vec)
+__global__ void reduction(int CUs, int attrs_per_CU, int attrs_size, int remaining_attrs,
+    int k, int dims, float* __restrict__ sums, unsigned int* __restrict__ counts)
 {
     // cast in order to keep the T type
-    extern __shared__ __align__(sizeof(T)) unsigned char smem[];
-    T* shared_data = reinterpret_cast<T*>(smem);
+    extern __shared__ float shared_sum[];
+    unsigned int* shared_count = (unsigned int*) &shared_sum[CUs];
 
-    const int global_index = blockIdx.x * blockDim.x + threadIdx.x;
-    const int local_index  = threadIdx.x;
-    const int x            = local_index;
+    const int cluster        = blockIdx.x * blockDim.x + threadIdx.x;
+    const int d              = blockIdx.y * blockDim.y + threadIdx.y;
+    const int local_idx      = threadIdx.z;
+    const int attr_start_idx = attrs_per_CU * local_idx;
+    const int n_attrs        = (local_idx == CUs-1) ? attrs_per_CU + remaining_attrs : attrs_per_CU;
+    int sum{0}, counter{0};
 
-    for (int cluster = 0; cluster < k; cluster++) {
-        // load by cluster
-        shared_data[x] = vec[(attrs_size * cluster * dims) + global_index + dim_offset];
+    // load all elements by thread
+    sum = 0;
+    counter = 0;
+    for(int i{attr_start_idx}; i < attr_start_idx + n_attrs; i++) {
+        sum     += sums[(attrs_size * cluster * dims) + d * attrs_size + i];
+        counter += counts[attrs_size * cluster + i];
+    }
+    shared_sum[local_idx]   = sum;
+    shared_count[local_idx] = counter;
 
-        // tree reduction
-        for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-            __syncthreads();
-            if (local_index < stride)
-                shared_data[x] += shared_data[x + stride];
+    // tree reduction
+    for (int stride = blockDim.z >> 1; stride > 0; stride >>= 1) {
+        __syncthreads();
+        if (local_idx < stride) {
+            shared_sum[local_idx]   += shared_sum[local_idx + stride];
+            shared_count[local_idx] += shared_count[local_idx + stride];
         }
+    }
 
-        if (local_index == 0) {  
-            int cluster_index  = (attrs_size * cluster * dims) + blockIdx.x + dim_offset;
-            vec[cluster_index] = shared_data[x];
-        }
+    if (local_idx == 0) {
+        sums[(attrs_size * cluster * dims) + d * attrs_size] = shared_sum[0];
+        counts[attrs_size * cluster]                         = shared_count[0];
     }
 }
 
@@ -156,7 +166,7 @@ void Device::run_k_means(int iterations) {
         t_assign += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
 
         start = std::chrono::high_resolution_clock::now();
-        _manage_reduction();
+        _reduction();
         _sync();
         end = std::chrono::high_resolution_clock::now();
         t_reduction += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
@@ -219,32 +229,23 @@ void Device::_assign_clusters() {
 }
 
 
-template <typename T>
-void Device::_reduce(T* vec, size_t _dims, size_t dim_offset) {
-    int shared_size = threads * sizeof(T);
-    reduce<<<blocks, threads, shared_size>>>(attributes_size, k, _dims, dim_offset, vec);
-}
-
-
-void Device::_manage_reduction() {
-    int elements{attributes_size};
-    std::tie (blocks, threads, work_items) = _get_block_threads(elements);
-
-    // iterate 'till all elements are equals to number of clusters, 
-    // which means that all the reductions are done.
-    while (elements > k) {
-        // reduce each dimension
-        for(int d{0}; d < dims; d++)
-            _reduce<float>(this->sum, dims, d*attributes_size);
-    
-        _reduce<unsigned int>(this->counts, 1, 0);
-        _sync();
-
-        // re-calculate how many elements will need for next iteration
-        // each group will produce a partial solution of each cluster
-        elements = blocks*k;
-        std::tie (blocks, threads, work_items) = _get_block_threads(elements);
-    }
+void Device::_reduction() {
+	const size_t CUs       = THREADS_EU * EUs_SUBSLICE_NVIDIA_PASCAL;
+    const int attrs_per_CU = attributes_size / CUs;
+    const int remaining    = attributes_size % CUs;
+    int shared_size        = CUs * sizeof(float) + CUs * sizeof(unsigned int);
+    dim3 blocks(k, dims, 1);
+    dim3 threads(1, 1, CUs);
+    reduction<<<blocks, threads, shared_size>>>(
+        CUs,
+        attrs_per_CU,
+        attributes_size,
+        remaining,
+        k,
+        dims,
+        sum,
+        counts
+    );
 }
 
 

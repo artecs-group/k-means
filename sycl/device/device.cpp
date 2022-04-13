@@ -93,9 +93,9 @@ void Device::run_k_means(int iterations) {
 
         start = std::chrono::high_resolution_clock::now();
 #if defined(CPU_DEVICE)
-        _manage_cpu_reduction();
+        _cpu_reduction();
 #else
-        _manage_gpu_reduction();
+        _gpu_reduction();
 #endif
         _sync();
         end = std::chrono::high_resolution_clock::now();
@@ -192,65 +192,66 @@ void Device::_assign_clusters() {
 }
 
 
-template <typename T>
-void Device::_gpu_reduce(T* vec, size_t dims, size_t dim_offset) {
+void Device::_gpu_reduction() {
+#if defined(INTEL_GPU_DEVICE)
+	const size_t CUs       = THREADS_EU * EUs_SUBSLICE_INTEL_GEN9;
+#elif defined(NVIDIA_DEVICE)
+	const size_t CUs       = THREADS_EU * EUs_SUBSLICE_NVIDIA_PASCAL;
+#elif defined(CPU_DEVICE)	
+	const size_t CUs       = THREADS_EU * _queue.get_device().get_info<cl::sycl::info::device::max_compute_units>();
+#endif
+    const int attrs_per_CU = attribute_size / CUs;
+    const int remaining    = attribute_size % CUs;
+
     _queue.submit([&](handler& h) {
-        int attrs_size = this->attribute_size;
-        int work_items = this->work_items;
-        int group_size = this->group_size;
-        int k = this->k;
-        int s_size = group_size * sizeof(T);
-        sycl::accessor<T, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_data(s_size, h);
+        int attrs_size       = this->attribute_size;
+        int k                = this->k;
+        int dims             = this->dims;
+        float* sums          = this->sum;
+        unsigned int* counts = this->counts;
+        int s_size           = CUs * sizeof(float);
+        int c_size           = CUs * sizeof(unsigned int);
+        sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_sum(s_size, h);
+        sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_count(c_size, h);
 
-        h.parallel_for(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
-            const int global_index = item.get_global_id(0);
-            const int local_index  = item.get_local_id(0);
-            const int x            = local_index;
+        h.parallel_for(nd_range(range(k, dims, CUs), range(1, 1, CUs)), [=](nd_item<3> item){
+            const int cluster        = item.get_global_id(0);
+            const int d              = item.get_global_id(1);
+            const int local_idx      = item.get_local_id(2);
+            const int attr_start_idx = attrs_per_CU * local_idx;
+            const int n_attrs        = (local_idx == CUs-1) ? attrs_per_CU + remaining : attrs_per_CU;
+            int sum{0}, counter{0};
 
-            for (int cluster = 0; cluster < k; cluster++) {
-                // load by cluster
-                shared_data[x] = vec[(attrs_size * cluster * dims) + global_index + dim_offset];
+            // load all elements by thread
+            sum = 0;
+            counter = 0;
+            for(int i{attr_start_idx}; i < attr_start_idx + n_attrs; i++) {
+                sum     += sums[(attrs_size * cluster * dims) + d * attrs_size + i];
+                counter += counts[attrs_size * cluster + i];
+            }
+            
+            shared_sum[local_idx]   = sum;
+            shared_count[local_idx] = counter;
 
-                // tree reduction
-                for (int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
-                    item.barrier(sycl::access::fence_space::local_space);
-                    if (local_index < stride)
-                        shared_data[x] += shared_data[x + stride];
+            // tree reduction
+            for (int stride = item.get_local_range(2) >> 1; stride > 0; stride >>= 1) {
+                item.barrier(sycl::access::fence_space::local_space);
+                if (local_idx < stride) {
+                    shared_sum[local_idx]   += shared_sum[local_idx + stride];
+                    shared_count[local_idx] += shared_count[local_idx + stride];
                 }
+            }
 
-                if (local_index == 0) {  
-                    int id  = (attrs_size * cluster * dims) + item.get_group_linear_id() + dim_offset;
-                    vec[id] = shared_data[x];
-                }
+            if (local_idx == 0) {
+                sums[(attrs_size * cluster * dims) + d * attrs_size] = shared_sum[0];
+                counts[attrs_size * cluster]                         = shared_count[0];
             }
         });
     });
 }
 
 
-void Device::_manage_gpu_reduction() {
-    int elements{attribute_size};
-    std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
-
-    // iterate 'till all elements are equals to number of clusters, 
-    // which means that all the reductions are done.
-    while (elements > k) {
-        // reduce each dimension
-        for(int d{0}; d < dims; d++)
-            _gpu_reduce<float>(this->sum, dims, d*attribute_size);
-    
-        _gpu_reduce<unsigned int>(this->counts, 1, 0);
-        _sync();
-
-        // re-calculate how many elements will need for next iteration
-        // each group will produce a partial solution of each cluster
-        elements = groups*k;
-        std::tie (groups, group_size, work_items) = _get_group_work_items(elements);
-    }
-}
-
-
-void Device::_manage_cpu_reduction() {
+void Device::_cpu_reduction() {
     const size_t CUs       = _queue.get_device().get_info<cl::sycl::info::device::max_compute_units>();
     const int attrs_per_CU = attribute_size / CUs;
     const int remaining    = attribute_size % CUs;
