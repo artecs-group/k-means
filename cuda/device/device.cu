@@ -175,7 +175,6 @@ void Device::run_k_means(int iterations) {
         _sync();
         end = std::chrono::high_resolution_clock::now();
         t_mean += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
-        break;
     }
 
     double total = t_assign + t_reduction + t_mean;

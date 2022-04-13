@@ -35,11 +35,12 @@ int main(int argc, const char* argv[]) {
     device.run_k_means(number_of_iterations);
     const auto end      = std::chrono::high_resolution_clock::now();
     const auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(end - start);
-    std::cerr << "Took: " << duration.count() << "s" << std::endl;
+    std::cout << "Total time = " << duration.count() << "s" << std::endl;
 
     std::vector<float> mean(clusters*dims, 0);
     device.save_solution(mean);
 
+    std::cout << std::endl << "Clusters:" << std::endl;
     for (size_t cluster{0}; cluster < clusters; ++cluster) {
         for(size_t d{0}; d < dims; d++)
             std::cout << mean[cluster * dims + d] << " ";
