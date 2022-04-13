@@ -43,10 +43,9 @@ __global__ void assign_clusters(int attrs_size, int k, int dims,
 }
 
 
-__global__ void reduction(int CUs, int attrs_per_CU, int attrs_size, int remaining_attrs,
+__global__ void tree_reduction(int CUs, int attrs_per_CU, int attrs_size, int remaining_attrs,
     int k, int dims, float* __restrict__ sums, unsigned int* __restrict__ counts)
 {
-    // cast in order to keep the T type
     extern __shared__ float shared_sum[];
     unsigned int* shared_count = (unsigned int*) &shared_sum[CUs];
 
@@ -176,6 +175,7 @@ void Device::run_k_means(int iterations) {
         _sync();
         end = std::chrono::high_resolution_clock::now();
         t_mean += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
+        break;
     }
 
     double total = t_assign + t_reduction + t_mean;
@@ -234,9 +234,8 @@ void Device::_reduction() {
     const int attrs_per_CU = attributes_size / CUs;
     const int remaining    = attributes_size % CUs;
     int shared_size        = CUs * sizeof(float) + CUs * sizeof(unsigned int);
-    dim3 blocks(k, dims, 1);
-    dim3 threads(1, 1, CUs);
-    reduction<<<blocks, threads, shared_size>>>(
+    dim3 blocks(k, dims, 1), threads(1, 1, CUs);
+    tree_reduction<<<blocks, threads, shared_size>>>(
         CUs,
         attrs_per_CU,
         attributes_size,

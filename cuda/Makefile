@@ -9,7 +9,7 @@ else
 	CFLAGS += -O3
 endif
 
-main: ./device/device.o main.o
+k_means: ./device/device.o main.o
 	$(CC) $(CFLAGS) main.o ./device/device.o -o k_means
 
 main.o: ./device/device.o
@@ -18,7 +18,7 @@ main.o: ./device/device.o
 ./device/device.o: ./device/device.cuh
 	$(CC) $(CFLAGS) ./device/device.cu -c -o ./device/device.o
 
-run: main
+run: k_means
 	./k_means ../data/SyntheticDataset.csv 4 2 200000 300
 
 .PHONY: clean
