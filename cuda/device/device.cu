@@ -32,10 +32,11 @@ __global__ void assign_clusters(int attrs_size, int k, int dims,
     }
     assigments[global_index] = best_cluster;
 
+    int val_id{0}, sum_id{0};
     for(int cluster{0}; cluster < k; cluster++) {
         for(int d{0}; d < dims; d++) {
-            int val_id = (d * attrs_size) + global_index;
-            int sum_id = attrs_size * cluster * dims + val_id;
+            val_id       = (d * attrs_size) + global_index;
+            sum_id       = attrs_size * cluster * dims + val_id;
             sum[sum_id]  = (best_cluster == cluster) ? attrs[val_id] : 0;
         }
         counts[attrs_size * cluster + global_index] = (best_cluster == cluster) ? 1 : 0;
@@ -49,16 +50,14 @@ __global__ void tree_reduction(int CUs, int attrs_per_CU, int attrs_size, int re
     extern __shared__ float shared_sum[];
     unsigned int* shared_count = (unsigned int*) &shared_sum[CUs];
 
-    const int cluster        = blockIdx.x * blockDim.x + threadIdx.x;
-    const int d              = blockIdx.y * blockDim.y + threadIdx.y;
-    const int local_idx      = threadIdx.z;
+    const int cluster        = blockIdx.y * blockDim.y + threadIdx.y;
+    const int d              = blockIdx.z * blockDim.z + threadIdx.z;
+    const int local_idx      = threadIdx.x;
     const int attr_start_idx = attrs_per_CU * local_idx;
     const int n_attrs        = (local_idx == CUs-1) ? attrs_per_CU + remaining_attrs : attrs_per_CU;
     int sum{0}, counter{0};
 
     // load all elements by thread
-    sum = 0;
-    counter = 0;
     for(int i{attr_start_idx}; i < attr_start_idx + n_attrs; i++) {
         sum     += sums[(attrs_size * cluster * dims) + d * attrs_size + i];
         counter += counts[attrs_size * cluster + i];
@@ -67,7 +66,7 @@ __global__ void tree_reduction(int CUs, int attrs_per_CU, int attrs_size, int re
     shared_count[local_idx] = counter;
 
     // tree reduction
-    for (int stride = blockDim.z >> 1; stride > 0; stride >>= 1) {
+    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
         __syncthreads();
         if (local_idx < stride) {
             shared_sum[local_idx]   += shared_sum[local_idx + stride];
@@ -107,7 +106,7 @@ Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_
     sum_bytes           = sum_size * sizeof(float);
     count_bytes         = k * attributes_size * sizeof(unsigned int);
 
-    cudaMalloc(&attributes, attributes_size_pad * sizeof(float));
+    cudaMalloc(&attributes, attributes_size_pad * dims * sizeof(float));
     cudaMalloc(&mean, mean_bytes);
     cudaMalloc(&sum, sum_bytes);
     cudaMalloc(&counts, count_bytes);
@@ -233,7 +232,7 @@ void Device::_reduction() {
     const int attrs_per_CU = attributes_size / CUs;
     const int remaining    = attributes_size % CUs;
     int shared_size        = CUs * sizeof(float) + CUs * sizeof(unsigned int);
-    dim3 blocks(k, dims, 1), threads(1, 1, CUs);
+    dim3 blocks(1, k, dims), threads(CUs);
     tree_reduction<<<blocks, threads, shared_size>>>(
         CUs,
         attrs_per_CU,

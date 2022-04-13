@@ -223,8 +223,6 @@ void Device::_gpu_reduction() {
             int sum{0}, counter{0};
 
             // load all elements by thread
-            sum = 0;
-            counter = 0;
             for(int i{attr_start_idx}; i < attr_start_idx + n_attrs; i++) {
                 sum     += sums[(attrs_size * cluster * dims) + d * attrs_size + i];
                 counter += counts[attrs_size * cluster + i];
