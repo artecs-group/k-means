@@ -251,8 +251,9 @@ void Device::_manage_gpu_reduction() {
 
 
 void Device::_manage_cpu_reduction() {
-    const size_t CUs = _queue.get_device().get_info<cl::sycl::info::device::max_compute_units>();
-    const int attrs_per_CU = attribute_size_pad / CUs; // assure CUs is 2 multiple
+    const size_t CUs       = _queue.get_device().get_info<cl::sycl::info::device::max_compute_units>();
+    const int attrs_per_CU = attribute_size / CUs;
+    const int remaining    = attribute_size % CUs;
 
     _queue.submit([&](handler &h) {
         int attrs_size = this->attribute_size;
@@ -262,18 +263,19 @@ void Device::_manage_cpu_reduction() {
         unsigned int* count = this->counts;
 
         h.parallel_for(nd_range(range(CUs), range(1)), [=](nd_item<1> item){
-            const int attr_start_idx = attrs_per_CU * item.get_global_id(0);
-            int cluster_id{0}, sum_id{0}, count_id{0};
+            const int global_idx     = item.get_global_id(0);
+            const int attr_start_idx = attrs_per_CU * global_idx;
+            const int n_attrs        = (global_idx == CUs-1) ? attrs_per_CU + remaining : attrs_per_CU;
+            int sum_id{0}, count_id{0};
 
             for (int cluster{0}; cluster < k; cluster++) {
                 count_id = (attrs_size * cluster) + attr_start_idx;
 
-                for(int i{1}; i < attrs_per_CU; i++) {
+                for(int i{1}; i < n_attrs; i++) {
                     count[count_id] += count[count_id + i];
 
                     for(int d{0}; d < dims; d++) {
-                        cluster_id   = (attrs_size * cluster * dims) + d * attrs_size;
-                        sum_id       = cluster_id + attr_start_idx;
+                        sum_id       = (attrs_size * cluster * dims) + d * attrs_size + attr_start_idx;
                         sum[sum_id] += sum[sum_id + i];
                     }
                 }
