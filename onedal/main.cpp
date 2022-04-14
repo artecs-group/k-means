@@ -1,5 +1,5 @@
 /*
- * Compile: dpcpp --gcc-toolchain=/usr -std=c++17 -pedantic -Wall -Wextra -Werror -Wno-unused-parameter -fsycl-device-code-split=per_kernel -I./source -I"${ONEAPI_ROOT}/dal/latest/include" main.cpp -o main -L"${ONEAPI_ROOT}/dal/latest/lib/intel64" -L"${ONEAPI_ROOT}/tbb/latest/env/../lib/intel64/gcc4.8" -lonedal_dpc -lonedal_core -lonedal_thread "${ONEAPI_ROOT}/dal/latest/lib/intel64"/libonedal_sycl.a -ltbb -ltbbmalloc -lpthread -lOpenCL -ldl
+ * Compile: dpcpp --gcc-toolchain=/usr -std=c++17 -pedantic -Wall -Wextra -Werror -Wno-unused-parameter -fsycl-device-code-split=per_kernel -I./source -I"${ONEAPI_ROOT}/dal/latest/include" main.cpp -o main.exe -L"${ONEAPI_ROOT}/dal/latest/lib/intel64" -L"${ONEAPI_ROOT}/tbb/latest/env/../lib/intel64/gcc4.8" -lonedal_dpc -lonedal_core -lonedal_thread "${ONEAPI_ROOT}/dal/latest/lib/intel64"/libonedal_sycl.a -ltbb -ltbbmalloc -lpthread -lOpenCL -ldl
 */
 
 #include <CL/sycl.hpp>
@@ -69,7 +69,9 @@ int main(int argc, const char* argv[]) {
 
     auto queue = sycl::queue{selector};
     std::cout << "Running on " << queue.get_device().get_info<sycl::info::device::name>() << std::endl;
-    const auto data = oneapi::dal::read<oneapi::dal::table>(queue, oneapi::dal::csv::data_source{file_name});
+    auto data_source = oneapi::dal::csv::data_source{file_name};
+    data_source.set_delimiter(' ');
+    const auto data = oneapi::dal::read<oneapi::dal::table>(queue, data_source);
 
     const auto kmeans_init_desc = oneapi::dal::kmeans_init::descriptor<float, oneapi::dal::kmeans_init::method::random_dense>().set_cluster_count(k);
     const auto result_init = oneapi::dal::compute(queue, kmeans_init_desc, data);
@@ -87,7 +89,7 @@ int main(int argc, const char* argv[]) {
     std::cout << "Took: " << duration.count() << "s" << std::endl
               << "Iteration count: " << result.get_iteration_count() << std::endl;
 
-    std::cout << "Centroids:\n" << result.get_model().get_centroids() << std::endl;
+    //std::cout << "Centroids:\n" << result.get_model().get_centroids() << std::endl;
 
     return 0;
 }

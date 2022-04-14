@@ -4,3 +4,5 @@ k_means
 kmeans
 __pycache__
 *.txt
+venv/
+*.exe
