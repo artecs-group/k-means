@@ -4,3 +4,4 @@ kmeans
 __pycache__
 *.txt
 k_means
+venv/
