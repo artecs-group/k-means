@@ -34,7 +34,7 @@ all:
 
 .PHONY: clean
 clean:
-	rm -f *.o $(EXECNAME) *.linkinfo *~ *.bak .depend
+	rm -f *.o $(EXECNAME) *.linkinfo *~ *.bak .depend *.txt
 
 
 #Regles automatiques pour les objets
