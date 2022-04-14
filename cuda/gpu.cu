@@ -513,5 +513,5 @@ void gpuKmeans(void)
         NbIters++;   // Count the number of iterations
         tolerance = (double)track / NbPoints;     
         //printf("Track = %llu  Tolerance = %lf\n", track, tolerance); 
-    } while (NbIters < MaxNbIters);
+    } while (tolerance > TOL && NbIters < MaxNbIters);
 }

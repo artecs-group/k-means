@@ -3,10 +3,10 @@
 /*-----------------------------------------------------------------------------------------*/
 // Benchmark dataset
 #define NbPoints    200000      // Number of data instances
-#define NbDims      2             // Number of dimensions
+#define NbDims      4             // Number of dimensions
 #define NbClusters  4             // Number of clusters
 #define NbPackages  100           // Number of packages used for UpdateCentroids
-#define INPUT_DATA                "../data/SyntheticDataset.txt"
+#define INPUT_DATA                "../data/SyntheticDataset.csv"
 #define INPUT_INITIAL_CENTROIDS   ""   // Optional
 
 // Adjustable block size
@@ -24,8 +24,8 @@
 // Default values
 #define DEFAULT_ONGPUFLAG     1         // Default flag of computation on GPU
 #define DEFAULT_NB_THREADS    1         // Default number of OpenMP threads on CPU
-#define DEFAULT_MAX_NB_ITERS  200       // Default maximal number of iterations
-#define DEFAULT_TOL           1.0E-4    // Default tolerance (convergence criterion)
+#define DEFAULT_MAX_NB_ITERS  300       // Default maximal number of iterations
+#define DEFAULT_TOL           0    // Default tolerance (convergence criterion)
 
 // Output files
 #define OUTPUT_LABELS              "Labels.txt"
