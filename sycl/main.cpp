@@ -36,6 +36,10 @@ int main(int argc, const char* argv[]) {
     const auto end      = std::chrono::high_resolution_clock::now();
     const auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(end - start);
     std::cout << "Total time = " << duration.count() << "s" << std::endl;
+    std::cout << "Clusters   = " << clusters << std::endl
+              << "Dimensions = " << dims << std::endl
+              << "Atributes  = " << n_points << std::endl
+              << "Iterations = " << number_of_iterations << std::endl;
 
     std::vector<float> mean(clusters*dims, 0);
     device.save_solution(mean);
