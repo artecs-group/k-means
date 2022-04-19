@@ -87,7 +87,8 @@ int main(int argc, const char* argv[]) {
     const auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(end - start);
     
     std::cout << "Took: " << duration.count() << "s" << std::endl
-              << "Iteration count: " << result.get_iteration_count() << std::endl;
+              << "Iteration count: " << result.get_iteration_count() << std::endl
+              << "Clusters: " << k << std::endl;
 
     //std::cout << "Centroids:\n" << result.get_model().get_centroids() << std::endl;
 
