@@ -281,7 +281,7 @@ void Device::_gpu_reduction() {
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_sum(s_size, h);
         sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_count(c_size, h);
 
-        h.parallel_for(nd_range(range(k, dims, CUs), range(1, 1, CUs)), [=](nd_item<3> item){
+        h.parallel_for<class gpu_red>(nd_range(range(k, dims, CUs), range(1, 1, CUs)), [=](nd_item<3> item){
             const int cluster        = item.get_global_id(0);
             const int d              = item.get_global_id(1);
             const int local_idx      = item.get_local_id(2);
@@ -321,20 +321,8 @@ void Device::_cpu_reduction() {
     const int remaining    = attribute_size % CPU_PACKAGES;
 
     // clean matrices
-    _queue.submit([&](handler &h) {
-        int k = this->k;
-        int dims = this->dims;
-        float* mean = this->mean;
-        unsigned int* count = this->counts;
-
-        h.parallel_for(nd_range(range(k, dims), range(1, 1)), [=](nd_item<1> item){
-            const int cluster = item.get_global_id(0);
-            const int d       = item.get_global_id(1);
-            
-            count[cluster]           = 0.0;
-            mean[cluster * dims + d] = 0.0;
-        });
-    });
+    _queue.memset(counts, 0, count_bytes);
+    _queue.memset(mean, 0, mean_bytes);
     _sync();
 
     _queue.submit([&](handler &h) {
@@ -349,7 +337,7 @@ void Device::_cpu_reduction() {
         float p_size = k * dims * sizeof(float);
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> package(p_size, h);
 
-        h.parallel_for(nd_range(range(CPU_PACKAGES), range(1)), [=](nd_item<1> item){
+        h.parallel_for<class cpu_red>(nd_range(range(CPU_PACKAGES), range(1)), [=](nd_item<1> item){
             const int global_idx = item.get_global_id(0);
             const int offset     = attrs_per_CU * global_idx;
             const int length     = (global_idx == CPU_PACKAGES-1) ? attrs_per_CU + remaining : attrs_per_CU;

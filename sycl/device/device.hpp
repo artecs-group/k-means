@@ -10,6 +10,7 @@
 #define EUs_SUBSLICE_INTEL_GEN9 8
 #define EUs_SUBSLICE_INTEL_GEN12 16
 #define EUs_SUBSLICE_NVIDIA_PASCAL 128
+#define CPU_PACKAGES 100
 
 using namespace cl::sycl;
 
@@ -49,7 +50,6 @@ class Device {
 
     private:
         sycl::queue _queue;
-        static constexpr size_t CPU_PACKAGES = 100;
 
         float *attributes{nullptr}, *mean{nullptr}, *sum{nullptr};
         unsigned int* counts{nullptr};
