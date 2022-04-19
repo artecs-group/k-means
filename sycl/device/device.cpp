@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <chrono>
+#include <dpct/dpct.hpp>
 #include "./device.hpp"
 
 
@@ -14,7 +15,21 @@ float squared_l2_distance(float x_1, float x_2) {
 
 Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_k), dims(_dims){
     _queue = _get_queue();
-    
+
+#if defined(CPU_DEVICE)
+    attribute_size     = n_attrs;
+    attribute_bytes    = attribute_size * dims * sizeof(float);
+    mean_bytes         = k * dims * sizeof(float);
+    count_bytes        = k * sizeof(unsigned int);
+
+    attributes = malloc_device<float>(attribute_size * sizeof(float), _queue);
+    mean       = malloc_device<float>(mean_bytes, _queue);
+    counts     = malloc_device<unsigned int>(count_bytes, _queue);
+    assigments = malloc_device<int>(attribute_size * sizeof(int), _queue);
+
+    // init pad values
+    _queue.memset(attributes, 0, attribute_size * sizeof(float));
+#else
     attribute_size     = n_attrs;
     std::tie (groups, group_size, work_items) = _get_group_work_items(attribute_size);
 
@@ -33,6 +48,7 @@ Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_
 
     // init pad values
     _queue.memset(attributes, 0, attribute_size_pad * dims * sizeof(float));
+#endif
     _sync();
     _queue.memcpy(attributes, h_attrs.data(), attribute_bytes);
 
@@ -48,9 +64,13 @@ Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_
     }
 
     _queue.memcpy(mean, h_mean.data(), mean_bytes);
-    _queue.memset(sum, 0, sum_bytes);
     _queue.memset(counts, 0, count_bytes);
-    _queue.memset(assigments, 0, attribute_size_pad * sizeof(int)); // potential bug: try init to -1
+#if defined(CPU_DEVICE)
+    _queue.memset(assigments, 0, attribute_size * sizeof(int));
+#else
+    _queue.memset(assigments, 0, attribute_size_pad * sizeof(int));
+    _queue.memset(sum, 0, sum_bytes);
+#endif
     _sync();
 }
 
@@ -86,7 +106,11 @@ void Device::run_k_means(int iterations) {
     float t_assign{0}, t_reduction{0}, t_mean{0};
     for (size_t i{0}; i < iterations; ++i) {
         start = std::chrono::high_resolution_clock::now();
-        _assign_clusters(); 
+#if defined(CPU_DEVICE)
+        _cpu_assign_clusters();
+#else
+        _gpu_assign_clusters();
+#endif
         _sync();
         end = std::chrono::high_resolution_clock::now();
         t_assign += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
@@ -147,7 +171,50 @@ void Device::_sync() {
 }
 
 
-void Device::_assign_clusters() {
+void Device::_cpu_assign_clusters() {
+    const size_t CUs       = _queue.get_device().get_info<cl::sycl::info::device::max_compute_units>();
+    const int attrs_per_CU = attribute_size / CUs;
+    const int remaining    = attribute_size % CUs;
+
+    _queue.submit([&](handler& h) {
+        int attrs_size = this-> attribute_size;
+        int k = this->k;
+        int dims = this->dims;
+        float* attrs = this->attributes;
+        float* mean = this->mean;
+        float* sum = this->sum;
+        unsigned int* counts = this->counts;
+        int* assigments = this->assigments;
+
+        h.parallel_for<class cpu_assign_clusters>(nd_range(range(CUs), range(1)), [=](nd_item<1> item){
+            const int global_idx     = item.get_global_id(0);
+            const int attr_start_idx = attrs_per_CU * global_idx;
+            const int n_attrs        = (global_idx == CUs-1) ? attrs_per_CU + remaining : attrs_per_CU;
+
+            float best_distance{FLT_MAX};
+            int best_cluster{-1};
+            float distance{0};
+            for(int i{attr_start_idx}; i < attr_start_idx + n_attrs; i++) {
+                best_distance = FLT_MAX;
+                best_cluster  = -1;
+                for (int cluster = 0; cluster < k; ++cluster) {
+                    for(int d{0}; d < dims; d++)
+                        distance += squared_l2_distance(attrs[(d * attrs_size) + i], mean[(cluster * dims) + d]);
+                    
+                    if (distance < best_distance) {
+                        best_distance = distance;
+                        best_cluster = cluster;
+                    }
+                    distance = 0;
+                }
+                assigments[i] = best_cluster;
+            }
+        });
+    });
+}
+
+
+void Device::_gpu_assign_clusters() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(attribute_size);
 
     _queue.submit([&](handler& h) {
@@ -250,9 +317,25 @@ void Device::_gpu_reduction() {
 
 
 void Device::_cpu_reduction() {
-    const size_t CUs       = _queue.get_device().get_info<cl::sycl::info::device::max_compute_units>();
-    const int attrs_per_CU = attribute_size / CUs;
-    const int remaining    = attribute_size % CUs;
+    const int attrs_per_CU = attribute_size / CPU_PACKAGES;
+    const int remaining    = attribute_size % CPU_PACKAGES;
+
+    // clean matrices
+    _queue.submit([&](handler &h) {
+        int k = this->k;
+        int dims = this->dims;
+        float* mean = this->mean;
+        unsigned int* count = this->counts;
+
+        h.parallel_for(nd_range(range(k, dims), range(1, 1)), [=](nd_item<1> item){
+            const int cluster = item.get_global_id(0);
+            const int d       = item.get_global_id(1);
+            
+            count[cluster]           = 0.0;
+            mean[cluster * dims + d] = 0.0;
+        });
+    });
+    _sync();
 
     _queue.submit([&](handler &h) {
         int attrs_size = this->attribute_size;
@@ -260,51 +343,27 @@ void Device::_cpu_reduction() {
         int dims = this->dims;
         float* sum = this->sum;
         unsigned int* count = this->counts;
+        float* attrs = this->attributes;
+        float* mean  = this->mean;
+        int* assigments = this->assigments;
+        float p_size = k * dims * sizeof(float);
+        sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> package(p_size, h);
 
-        h.parallel_for(nd_range(range(CUs), range(1)), [=](nd_item<1> item){
-            const int global_idx     = item.get_global_id(0);
-            const int attr_start_idx = attrs_per_CU * global_idx;
-            const int n_attrs        = (global_idx == CUs-1) ? attrs_per_CU + remaining : attrs_per_CU;
-            int sum_id{0}, count_id{0};
+        h.parallel_for(nd_range(range(CPU_PACKAGES), range(1)), [=](nd_item<1> item){
+            const int global_idx = item.get_global_id(0);
+            const int offset     = attrs_per_CU * global_idx;
+            const int length     = (global_idx == CPU_PACKAGES-1) ? attrs_per_CU + remaining : attrs_per_CU;
 
-            for (int cluster{0}; cluster < k; cluster++) {
-                count_id = (attrs_size * cluster) + attr_start_idx;
-
-                for(int i{1}; i < n_attrs; i++) {
-                    count[count_id] += count[count_id + i];
-
-                    for(int d{0}; d < dims; d++) {
-                        sum_id       = (attrs_size * cluster * dims) + d * attrs_size + attr_start_idx;
-                        sum[sum_id] += sum[sum_id + i];
-                    }
-                }
+            for (int i{offset}; i < offset + length; i++) {
+                int cluster = assigments[i];
+                sycl::atomic<unsigned int>(sycl::global_ptr<unsigned int>(&count[cluster])).fetch_add(1);
+                for(int d{0}; d < dims; d++)
+                    package[cluster * k + d] += attrs[d * dims + i];
             }
-        });
-    });
-    _sync();
 
-    // serial reduction
-    // reduce all previous reductions
-    _queue.submit([&](handler &h) {
-        int attrs_size = this->attribute_size;
-        int k = this->k;
-        int dims = this->dims;
-        unsigned int* counts = this->counts;
-        float* sum = this->sum;
-
-        h.single_task([=]() {
-            int cluster_id{0}, dim_id{0};
-
-            for(int cluster{0}; cluster < k; cluster++){
-                cluster_id = (attrs_size * cluster);
-                for(int i{attrs_per_CU}; i < attrs_size; i += attrs_per_CU) {
-                    counts[cluster_id] += counts[cluster_id + i];
-                    
-                    for(int d{0}; d < dims; d++) {
-                        dim_id       = (attrs_size * cluster * dims) + d * attrs_size;
-                        sum[dim_id] += sum[dim_id + i];
-                    }
-                }
+            for(int cluster{0}; cluster < k; cluster++) {
+                for(int d{0}; d < dims; d++)
+                    dpct::atomic_fetch_add(&mean[cluster * k + d], package[cluster * k + d]); 
             }
         });
     });
@@ -322,11 +381,17 @@ void Device::_compute_mean() {
 
         h.parallel_for<class compute_mean>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
+#if defined(CPU_DEVICE)
+            const int count        = (1 < counts[global_index]) ? counts[global_index] : 1;
+            for(int d{0}; d < dims; d++)
+                mean[dims * d + global_index] /= count;
+#else
             const int count        = (1 < counts[attrs_size * global_index]) ? counts[attrs_size * global_index] : 1;
             for(int d{0}; d < dims; d++) {
                 int id = (global_index * attrs_size * dims) + (d * attrs_size);
                 mean[global_index * dims + d] = sum[id] / count;
             }
+#endif
         });
     });
 }

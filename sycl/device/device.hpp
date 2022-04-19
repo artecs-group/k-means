@@ -49,6 +49,7 @@ class Device {
 
     private:
         sycl::queue _queue;
+        static constexpr size_t CPU_PACKAGES = 100;
 
         float *attributes{nullptr}, *mean{nullptr}, *sum{nullptr};
         unsigned int* counts{nullptr};
@@ -58,7 +59,8 @@ class Device {
 
         sycl::queue _get_queue();
         void _sync();
-        void _assign_clusters();
+        void _cpu_assign_clusters();
+        void _gpu_assign_clusters();
         void _cpu_reduction();
         void _gpu_reduction();
         void _compute_mean();
