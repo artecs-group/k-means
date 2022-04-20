@@ -7,7 +7,7 @@
 #include "./device.hpp"
 
 
-float squared_l2_distance(float x_1, float x_2) {
+inline float squared_l2_distance(float x_1, float x_2) {
     float a = x_1 - x_2;
     return a*a;
 }
