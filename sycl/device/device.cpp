@@ -13,24 +13,22 @@ float squared_l2_distance(float x_1, float x_2) {
 }
 
 
-Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_k), dims(_dims){
+Device::Device(int _k, int _dims, int length, std::vector<float>& h_attrs): k(_k), dims(_dims){
     _queue = _get_queue();
 
 #if defined(CPU_DEVICE)
-    attribute_size     = n_attrs;
+    attribute_size     = length;
     attribute_bytes    = attribute_size * dims * sizeof(float);
     mean_bytes         = k * dims * sizeof(float);
     count_bytes        = k * sizeof(unsigned int);
 
-    attributes = malloc_device<float>(attribute_size * sizeof(float), _queue);
+    attributes = malloc_device<float>(attribute_bytes, _queue);
     mean       = malloc_device<float>(mean_bytes, _queue);
     counts     = malloc_device<unsigned int>(count_bytes, _queue);
     assigments = malloc_device<int>(attribute_size * sizeof(int), _queue);
 
-    // init pad values
-    _queue.memset(attributes, 0, attribute_size * sizeof(float));
 #else
-    attribute_size     = n_attrs;
+    attribute_size     = length;
     std::tie (groups, group_size, work_items) = _get_group_work_items(attribute_size);
 
     attribute_size_pad = attribute_size + (work_items - attribute_size);
@@ -48,8 +46,8 @@ Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_
 
     // init pad values
     _queue.memset(attributes, 0, attribute_size_pad * dims * sizeof(float));
-#endif
     _sync();
+#endif
     _queue.memcpy(attributes, h_attrs.data(), attribute_bytes);
 
     //shuffle attributes to random choose attributes
@@ -187,17 +185,18 @@ void Device::_cpu_assign_clusters() {
         int* assigments = this->assigments;
 
         h.parallel_for<class cpu_assign_clusters>(nd_range(range(CUs), range(1)), [=](nd_item<1> item){
-            const int global_idx     = item.get_global_id(0);
-            const int attr_start_idx = attrs_per_CU * global_idx;
-            const int n_attrs        = (global_idx == CUs-1) ? attrs_per_CU + remaining : attrs_per_CU;
+            const int global_idx = item.get_global_id(0);
+            const int offset     = attrs_per_CU * global_idx;
+            const int length     = (global_idx == CUs-1) ? attrs_per_CU + remaining : attrs_per_CU;
 
             float best_distance{FLT_MAX};
             int best_cluster{-1};
             float distance{0};
-            for(int i{attr_start_idx}; i < attr_start_idx + n_attrs; i++) {
+            for(int i{offset}; i < offset + length; i++) {
                 best_distance = FLT_MAX;
                 best_cluster  = -1;
                 for (int cluster = 0; cluster < k; ++cluster) {
+                    distance = 0;
                     for(int d{0}; d < dims; d++)
                         distance += squared_l2_distance(attrs[(d * attrs_size) + i], mean[(cluster * dims) + d]);
                     
@@ -205,7 +204,6 @@ void Device::_cpu_assign_clusters() {
                         best_distance = distance;
                         best_cluster = cluster;
                     }
-                    distance = 0;
                 }
                 assigments[i] = best_cluster;
             }
@@ -282,15 +280,15 @@ void Device::_gpu_reduction() {
         sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> shared_count(c_size, h);
 
         h.parallel_for<class gpu_red>(nd_range(range(k, dims, CUs), range(1, 1, CUs)), [=](nd_item<3> item){
-            const int cluster        = item.get_global_id(0);
-            const int d              = item.get_global_id(1);
-            const int local_idx      = item.get_local_id(2);
-            const int attr_start_idx = attrs_per_CU * local_idx;
-            const int n_attrs        = (local_idx == CUs-1) ? attrs_per_CU + remaining : attrs_per_CU;
+            const int cluster   = item.get_global_id(0);
+            const int d         = item.get_global_id(1);
+            const int local_idx = item.get_local_id(2);
+            const int offset    = attrs_per_CU * local_idx;
+            const int length    = (local_idx == CUs-1) ? attrs_per_CU + remaining : attrs_per_CU;
             int sum{0}, counter{0};
 
             // load all elements by thread
-            for(int i{attr_start_idx}; i < attr_start_idx + n_attrs; i++) {
+            for(int i{offset}; i < offset + length; i++) {
                 sum     += sums[(attrs_size * cluster * dims) + d * attrs_size + i];
                 counter += counts[attrs_size * cluster + i];
             }
@@ -329,7 +327,6 @@ void Device::_cpu_reduction() {
         int attrs_size = this->attribute_size;
         int k = this->k;
         int dims = this->dims;
-        float* sum = this->sum;
         unsigned int* count = this->counts;
         float* attrs = this->attributes;
         float* mean  = this->mean;
@@ -342,16 +339,19 @@ void Device::_cpu_reduction() {
             const int offset     = attrs_per_CU * global_idx;
             const int length     = (global_idx == CPU_PACKAGES-1) ? attrs_per_CU + remaining : attrs_per_CU;
 
+            for(int i{0}; i < k*dims; i++)
+                package[i] = 0.0;
+
             for (int i{offset}; i < offset + length; i++) {
                 int cluster = assigments[i];
                 sycl::atomic<unsigned int>(sycl::global_ptr<unsigned int>(&count[cluster])).fetch_add(1);
                 for(int d{0}; d < dims; d++)
-                    package[cluster * k + d] += attrs[d * dims + i];
+                    package[cluster * dims + d] += attrs[d * attrs_size + i];
             }
 
             for(int cluster{0}; cluster < k; cluster++) {
                 for(int d{0}; d < dims; d++)
-                    dpct::atomic_fetch_add(&mean[cluster * k + d], package[cluster * k + d]); 
+                    dpct::atomic_fetch_add(&mean[cluster * dims + d], package[cluster * dims + d]); 
             }
         });
     });
@@ -361,6 +361,18 @@ void Device::_cpu_reduction() {
 void Device::_compute_mean() {
     std::tie (groups, group_size, work_items) = _get_group_work_items(k);
     _queue.submit([&](handler& h) {
+#if defined(CPU_DEVICE)
+        int dims = this->dims;
+        unsigned int* counts = this->counts;
+        float* mean = this->mean;
+
+        h.parallel_for<class compute_mean>(nd_range(range(k), range(1)), [=](nd_item<1> item){
+            const int global_index = item.get_global_id(0);
+            const int count        = (0 < counts[global_index]) ? counts[global_index] : 1;
+            for(int d{0}; d < dims; d++)
+                mean[global_index * dims + d] /= count;
+        });
+#else
         int dims = this->dims;
         int attrs_size = this->attribute_size;
         unsigned int* counts = this->counts;
@@ -369,18 +381,14 @@ void Device::_compute_mean() {
 
         h.parallel_for<class compute_mean>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
             const int global_index = item.get_global_id(0);
-#if defined(CPU_DEVICE)
-            const int count        = (1 < counts[global_index]) ? counts[global_index] : 1;
-            for(int d{0}; d < dims; d++)
-                mean[dims * d + global_index] /= count;
-#else
-            const int count        = (1 < counts[attrs_size * global_index]) ? counts[attrs_size * global_index] : 1;
+            const int count        = (0 < counts[attrs_size * global_index]) ? counts[attrs_size * global_index] : 1;
+
             for(int d{0}; d < dims; d++) {
                 int id = (global_index * attrs_size * dims) + (d * attrs_size);
                 mean[global_index * dims + d] = sum[id] / count;
             }
-#endif
         });
+#endif
     });
 }
 
