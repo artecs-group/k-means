@@ -332,24 +332,30 @@ void Device::_cpu_reduction() {
         float* mean  = this->mean;
         int* assigments = this->assigments;
         float p_size = k * dims * sizeof(float);
+        float c_size = k * sizeof(unsigned int);
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> package(p_size, h);
+        sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> p_count(c_size, h);
 
         h.parallel_for<class cpu_red>(nd_range(range(CPU_PACKAGES), range(1)), [=](nd_item<1> item){
             const int global_idx = item.get_global_id(0);
             const int offset     = attrs_per_CU * global_idx;
             const int length     = (global_idx == CPU_PACKAGES-1) ? attrs_per_CU + remaining : attrs_per_CU;
 
-            for(int i{0}; i < k*dims; i++)
-                package[i] = 0.0;
+            for(int i{0}; i < k; i++) {
+                p_count[i] = 0.0;
+                for(int j{0}; j < dims; j++)
+                    package[i*dims + j] = 0.0;
+            }
 
             for (int i{offset}; i < offset + length; i++) {
                 int cluster = assigments[i];
-                sycl::atomic<unsigned int>(sycl::global_ptr<unsigned int>(&count[cluster])).fetch_add(1);
+                p_count[cluster]++;
                 for(int d{0}; d < dims; d++)
                     package[cluster * dims + d] += attrs[d * attrs_size + i];
             }
 
             for(int cluster{0}; cluster < k; cluster++) {
+                sycl::atomic<unsigned int>(sycl::global_ptr<unsigned int>(&count[cluster])).fetch_add(p_count[cluster]);
                 for(int d{0}; d < dims; d++)
                     dpct::atomic_fetch_add(&mean[cluster * dims + d], package[cluster * dims + d]); 
             }
