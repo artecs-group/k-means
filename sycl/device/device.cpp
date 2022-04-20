@@ -58,7 +58,7 @@ Device::Device(int _k, int _dims, int length, std::vector<float>& h_attrs): k(_k
     for(int i{0}; i < k; i++) {
         int idx = indices(rng);
         for(int j{0}; j < dims; j++)
-            h_mean.push_back(h_attrs[idx + j * attribute_size]);
+            h_mean.push_back(h_attrs[idx * dims + j]);
     }
 
     _queue.memcpy(mean, h_mean.data(), mean_bytes);
@@ -170,9 +170,7 @@ void Device::_sync() {
 
 
 void Device::_cpu_assign_clusters() {
-    const size_t CUs       = _queue.get_device().get_info<cl::sycl::info::device::max_compute_units>();
-    const int attrs_per_CU = attribute_size / CUs;
-    const int remaining    = attribute_size % CUs;
+    const int max_group  = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>() >> 2;
 
     _queue.submit([&](handler& h) {
         int attrs_size = this-> attribute_size;
@@ -184,29 +182,24 @@ void Device::_cpu_assign_clusters() {
         unsigned int* counts = this->counts;
         int* assigments = this->assigments;
 
-        h.parallel_for<class cpu_assign_clusters>(nd_range(range(CUs), range(1)), [=](nd_item<1> item){
+        h.parallel_for<class cpu_assign_clusters>(nd_range(range(attrs_size), range(max_group)), [=](nd_item<1> item){
             const int global_idx = item.get_global_id(0);
-            const int offset     = attrs_per_CU * global_idx;
-            const int length     = (global_idx == CUs-1) ? attrs_per_CU + remaining : attrs_per_CU;
 
             float best_distance{FLT_MAX};
             int best_cluster{-1};
             float distance{0};
-            for(int i{offset}; i < offset + length; i++) {
-                best_distance = FLT_MAX;
-                best_cluster  = -1;
-                for (int cluster = 0; cluster < k; ++cluster) {
-                    distance = 0;
-                    for(int d{0}; d < dims; d++)
-                        distance += squared_l2_distance(attrs[(d * attrs_size) + i], mean[(cluster * dims) + d]);
-                    
-                    if (distance < best_distance) {
-                        best_distance = distance;
-                        best_cluster = cluster;
-                    }
+
+            for (int cluster = 0; cluster < k; ++cluster) {
+                distance = 0;
+                for(int d{0}; d < dims; d++)
+                    distance += squared_l2_distance(attrs[(global_idx * dims) + d], mean[(cluster * dims) + d]);
+                
+                if (distance < best_distance) {
+                    best_distance = distance;
+                    best_cluster = cluster;
                 }
-                assigments[i] = best_cluster;
             }
+            assigments[global_idx] = best_cluster;
         });
     });
 }
@@ -351,7 +344,7 @@ void Device::_cpu_reduction() {
                 int cluster = assigments[i];
                 p_count[cluster]++;
                 for(int d{0}; d < dims; d++)
-                    package[cluster * dims + d] += attrs[d * attrs_size + i];
+                    package[cluster * dims + d] += attrs[i * dims + d];
             }
 
             for(int cluster{0}; cluster < k; cluster++) {
