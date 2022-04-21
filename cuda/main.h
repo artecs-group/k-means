@@ -2,11 +2,11 @@
 /* Define constants                                                                        */
 /*-----------------------------------------------------------------------------------------*/
 // Benchmark dataset
-#define NbPoints    200000      // Number of data instances
-#define NbDims      4             // Number of dimensions
+#define NbPoints    2049280      // Number of data instances
+#define NbDims      7             // Number of dimensions
 #define NbClusters  4             // Number of clusters
 #define NbPackages  100           // Number of packages used for UpdateCentroids
-#define INPUT_DATA                "../data/SyntheticDataset.csv"
+#define INPUT_DATA                "../data/household_power_consumption.txt"
 #define INPUT_INITIAL_CENTROIDS   ""   // Optional
 
 // Adjustable block size
@@ -24,7 +24,7 @@
 // Default values
 #define DEFAULT_ONGPUFLAG     1         // Default flag of computation on GPU
 #define DEFAULT_NB_THREADS    1         // Default number of OpenMP threads on CPU
-#define DEFAULT_MAX_NB_ITERS  300       // Default maximal number of iterations
+#define DEFAULT_MAX_NB_ITERS  20       // Default maximal number of iterations
 #define DEFAULT_TOL           0    // Default tolerance (convergence criterion)
 
 // Output files
