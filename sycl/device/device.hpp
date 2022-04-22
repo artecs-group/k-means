@@ -6,11 +6,7 @@
 #include <string>
 #include <CL/sycl.hpp>
 
-#define THREADS_EU 1
-#define EUs_SUBSLICE_INTEL_GEN9 8
-#define EUs_SUBSLICE_INTEL_GEN12 16
-#define EUs_SUBSLICE_NVIDIA_PASCAL 128
-#define CPU_PACKAGES 100
+#define PACKAGES 100
 
 using namespace cl::sycl;
 
@@ -51,16 +47,15 @@ class Device {
     private:
         sycl::queue _queue;
 
-        float *attributes{nullptr}, *mean{nullptr}, *sum{nullptr};
+        float *attributes{nullptr}, *mean{nullptr};
         unsigned int* counts{nullptr};
         int* assigments{nullptr};
-        int dims{0}, k{0}, attribute_size{0}, attribute_bytes{0}, mean_bytes{0}, sum_size{0}, sum_bytes{0}, 
+        int dims{0}, k{0}, attribute_size{0}, attribute_bytes{0}, mean_bytes{0}, 
             count_bytes{0}, attribute_size_pad{0}, group_size{0}, work_items{0}, groups{0};
 
         sycl::queue _get_queue();
         void _sync();
-        void _cpu_assign_clusters();
-        void _gpu_assign_clusters();
+        void _assign_clusters();
         void _cpu_reduction();
         void _gpu_reduction();
         void _compute_mean();
