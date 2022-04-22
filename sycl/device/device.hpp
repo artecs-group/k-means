@@ -47,8 +47,8 @@ class Device {
     private:
         sycl::queue _queue;
 
-        float *attributes{nullptr}, *mean{nullptr};
-        unsigned int* counts{nullptr};
+        float *attributes{nullptr}, *mean{nullptr}, *mean_package{nullptr};
+        unsigned int *counts{nullptr}, *count_package{nullptr};
         int* assigments{nullptr};
         int dims{0}, k{0}, attribute_size{0}, attribute_bytes{0}, mean_bytes{0}, 
             count_bytes{0}, attribute_size_pad{0}, group_size{0}, work_items{0}, groups{0};

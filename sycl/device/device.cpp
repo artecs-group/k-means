@@ -15,16 +15,19 @@ inline float squared_l2_distance(float x_1, float x_2) {
 
 Device::Device(int _k, int _dims, int length, std::vector<float>& h_attrs): k(_k), dims(_dims){
     _queue = _get_queue();
+    const int group_size = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
 
     attribute_size     = length;
     attribute_bytes    = attribute_size * dims * sizeof(float);
     mean_bytes         = k * dims * sizeof(float);
     count_bytes        = k * sizeof(unsigned int);
 
-    attributes = malloc_device<float>(attribute_bytes, _queue);
-    mean       = malloc_device<float>(mean_bytes, _queue);
-    counts     = malloc_device<unsigned int>(count_bytes, _queue);
-    assigments = malloc_device<int>(attribute_size * sizeof(int), _queue);
+    attributes    = malloc_device<float>(attribute_bytes, _queue);
+    mean_package  = malloc_device<float>(group_size * mean_bytes, _queue);
+    mean          = malloc_device<float>(mean_bytes, _queue);
+    counts        = malloc_device<unsigned int>(count_bytes, _queue);
+    count_package = malloc_device<unsigned int>(group_size * count_bytes, _queue);
+    assigments    = malloc_device<int>(attribute_size * sizeof(int), _queue);
 
     _queue.memcpy(attributes, h_attrs.data(), attribute_bytes);
 
@@ -52,6 +55,8 @@ Device::~Device() {
 	if(mean != nullptr)       free(mean, _queue);
 	if(counts != nullptr)     free(counts, _queue);
     if(assigments != nullptr) free(assigments, _queue);
+    if(mean_package != nullptr) free(mean_package, _queue);
+    if(count_package != nullptr) free(count_package, _queue);
 }
 
 
@@ -185,17 +190,19 @@ void Device::_gpu_reduction() {
     _sync();
 
     _queue.submit([&](handler& h) {
-        int attrs_size       = this->attribute_size;
-        int k                = this->k;
-        int dims             = this->dims;
-        float* attrs         = this->attributes;
-        float* mean          = this->mean;
-        int* assigments      = this->assigments;
-        unsigned int* counts = this->counts;
-        int mean_size        = group_size * k * dims * sizeof(float);
-        int count_size       = group_size * k * sizeof(unsigned int);
-        sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> mean_package(mean_size, h);
-        sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> count_package(count_size, h);
+        int attrs_size              = this->attribute_size;
+        int k                       = this->k;
+        int dims                    = this->dims;
+        float* attrs                = this->attributes;
+        float* mean                 = this->mean;
+        int* assigments             = this->assigments;
+        unsigned int* counts        = this->counts;
+        unsigned int* count_package = this->count_package;
+        float* mean_package         = this->mean_package;
+        // int mean_size        = group_size * k * dims * sizeof(float);
+        // int count_size       = group_size * k * sizeof(unsigned int);
+        // sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> mean_package(mean_size, h);
+        // sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> count_package(count_size, h);
 
         h.parallel_for<class gpu_red>(nd_range(range(PACKAGES*group_size), range(group_size)), [=](nd_item<1> item){
             const int grp_idx      = item.get_group(0);
@@ -208,7 +215,7 @@ void Device::_gpu_reduction() {
             const int offset       = offset_gr + attrs_per_wi * local_idx;
             const int length       = (local_idx == group_size-1) ? attrs_per_wi + remainder_wi : attrs_per_wi;
 
-            // init shared memory each work item inits its own memory section
+            // init memory each work item inits its own memory section
             for(int cluster{0}; cluster < k; cluster++) {
                 count_package[local_idx * k + cluster] = 0;
                 for(int d{0}; d < dims; d++)
