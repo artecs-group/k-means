@@ -144,6 +144,8 @@ void Device::_sync() {
 
 
 void Device::_assign_clusters() {
+    const int simd_width     = 4; //check that simd_width < dims
+    const int simd_reminder  = dims % simd_width;
     const int group_size     = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
     const int attrs_per_pckg = attribute_size / ASSIGN_PACKAGES;
     const int remainder_pckg = attribute_size % ASSIGN_PACKAGES;
@@ -156,17 +158,14 @@ void Device::_assign_clusters() {
         float* mean = this->mean;
         int* assigments = this->assigments;
 
-        h.parallel_for<class cpu_assign_clusters>(nd_range(range(ASSIGN_PACKAGES*group_size), range(group_size)), [=](nd_item<1> item){
-            const int grp_idx      = item.get_group(0);
-            const int global_idx   = item.get_global_id(0);
-            const int local_idx    = item.get_local_id(0);
-            const int offset_gr    = attrs_per_pckg * grp_idx;
-            const int length_gr    = (global_idx == ASSIGN_PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
-            const int attrs_per_wi = length_gr / group_size;
-            const int remainder_wi = length_gr % group_size;
-            const int offset       = offset_gr + attrs_per_wi * local_idx;
-            const int length       = (local_idx == group_size-1) ? attrs_per_wi + remainder_wi : attrs_per_wi;
+        h.parallel_for<class assign_clusters>(nd_range(range(ASSIGN_PACKAGES), range(1)), [=](nd_item<1> item){
+            const int global_idx = item.get_global_id(0);
+            const int offset     = attrs_per_pckg * global_idx;
+            const int length     = (global_idx == ASSIGN_PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
 
+            using global_ptr = sycl::multi_ptr<float, sycl::access::address_space::global_space>;
+
+            sycl::vec<float, simd_width> v_attr, v_mean, result;
             float best_distance{FLT_MAX};
             int best_cluster{-1};
             float distance{0};
@@ -175,9 +174,23 @@ void Device::_assign_clusters() {
                 best_distance = FLT_MAX;
                 for (int cluster = 0; cluster < k; ++cluster) {
                     distance = 0;
-                    for(int d{0}; d < dims; d++)
+
+                    // calculate simd squared_l2_distance
+                    for(int d{0}; d < dims / simd_width; d++) {
+                        v_attr.load(0, global_ptr(&attrs[(i * dims) + d]));
+                        v_mean.load(0, global_ptr(&mean[(cluster * dims) + d]));
+                        result  = v_attr - v_mean;
+                        result *= result;
+                    }
+
+                    // reduce simd lane in scalar
+                    for(int i{0}; i < simd_width; i++)
+                        distance += result[i];
+
+                    // calculate remaining values
+                    for(int d{dims - simd_reminder}; d < dims; d++)
                         distance += squared_l2_distance(attrs[(i * dims) + d], mean[(cluster * dims) + d]);
-                    
+
                     if (distance < best_distance) {
                         best_distance = distance;
                         best_cluster = cluster;
@@ -210,10 +223,6 @@ void Device::_gpu_reduction() {
         unsigned int* counts        = this->counts;
         unsigned int* count_package = this->count_package;
         float* mean_package         = this->mean_package;
-        // int mean_size        = group_size * k * dims * sizeof(float);
-        // int count_size       = group_size * k * sizeof(unsigned int);
-        // sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> mean_package(mean_size, h);
-        // sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> count_package(count_size, h);
 
         h.parallel_for<class gpu_red>(nd_range(range(REDUCTION_PACKAGES*group_size), range(group_size)), [=](nd_item<1> item){
             const int grp_idx      = item.get_group(0);
@@ -267,8 +276,10 @@ void Device::_gpu_reduction() {
 
 
 void Device::_cpu_reduction() {
-    const int attrs_per_CU = attribute_size / REDUCTION_PACKAGES;
-    const int remaining    = attribute_size % REDUCTION_PACKAGES;
+    const int simd_width    = 4; //check that simd_width < dims
+    const int simd_reminder = dims % simd_width;
+    const int attrs_per_CU  = attribute_size / REDUCTION_PACKAGES;
+    const int remaining     = attribute_size % REDUCTION_PACKAGES;
 
     // clean matrices
     _queue.memset(counts, 0, count_bytes);
@@ -292,7 +303,7 @@ void Device::_cpu_reduction() {
             const int global_idx = item.get_global_id(0);
             const int offset     = attrs_per_CU * global_idx;
             const int length     = (global_idx == REDUCTION_PACKAGES-1) ? attrs_per_CU + remaining : attrs_per_CU;
-            float4 v_dim, v_pckg;
+            sycl::vec<float, simd_width> v_dim, v_pckg;
 
             using global_ptr = sycl::multi_ptr<float, sycl::access::address_space::global_space>;
             using local_ptr  = sycl::multi_ptr<float, sycl::access::address_space::local_space>;
@@ -306,13 +317,15 @@ void Device::_cpu_reduction() {
             for (int i{offset}; i < offset + length; i++) {
                 int cluster = assigments[i];
                 p_count[cluster]++;
-                for(int d{0}; d < dims; d += 8) {
+                for(int d{0}; d < dims && d + simd_width < dims; d += simd_width) {
                     v_dim.load(0, global_ptr(&attrs[i * dims + d]));
                     v_pckg.load(0, local_ptr(&package[cluster * dims + d]));
-                    float4 result = v_dim + v_pckg;
-                    //package[cluster * dims + d] += attrs[i * dims + d];
+                    sycl::vec<float, simd_width> result = v_dim + v_pckg;
                     result.store(0, local_ptr(&package[cluster * dims + d]));
                 }
+                // calculate remaining dims
+                for(int d{dims - simd_reminder}; d < dims; d++)
+                    package[cluster * dims + d] += attrs[i * dims + d];
             }
 
             for(int cluster{0}; cluster < k; cluster++) {
