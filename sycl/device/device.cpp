@@ -144,7 +144,9 @@ void Device::_sync() {
 
 
 void Device::_assign_clusters() {
-    std::tie (groups, group_size, work_items) = _get_group_work_items(attribute_size);
+    const int group_size     = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
+    const int attrs_per_pckg = attribute_size / ASSIGN_PACKAGES;
+    const int remainder_pckg = attribute_size % ASSIGN_PACKAGES;
 
     _queue.submit([&](handler& h) {
         int attrs_size = this-> attribute_size;
@@ -154,25 +156,34 @@ void Device::_assign_clusters() {
         float* mean = this->mean;
         int* assigments = this->assigments;
 
-        h.parallel_for<class cpu_assign_clusters>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
-            const int global_idx = item.get_global_id(0);
+        h.parallel_for<class cpu_assign_clusters>(nd_range(range(ASSIGN_PACKAGES*group_size), range(group_size)), [=](nd_item<1> item){
+            const int grp_idx      = item.get_group(0);
+            const int global_idx   = item.get_global_id(0);
+            const int local_idx    = item.get_local_id(0);
+            const int offset_gr    = attrs_per_pckg * grp_idx;
+            const int length_gr    = (global_idx == ASSIGN_PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
+            const int attrs_per_wi = length_gr / group_size;
+            const int remainder_wi = length_gr % group_size;
+            const int offset       = offset_gr + attrs_per_wi * local_idx;
+            const int length       = (local_idx == group_size-1) ? attrs_per_wi + remainder_wi : attrs_per_wi;
 
-            if(global_idx < attrs_size) {
-                float best_distance{FLT_MAX};
-                int best_cluster{-1};
-                float distance{0};
+            float best_distance{FLT_MAX};
+            int best_cluster{-1};
+            float distance{0};
 
+            for(int i = offset; i < offset + length; i++) {
+                best_distance = FLT_MAX;
                 for (int cluster = 0; cluster < k; ++cluster) {
                     distance = 0;
                     for(int d{0}; d < dims; d++)
-                        distance += squared_l2_distance(attrs[(global_idx * dims) + d], mean[(cluster * dims) + d]);
+                        distance += squared_l2_distance(attrs[(i * dims) + d], mean[(cluster * dims) + d]);
                     
                     if (distance < best_distance) {
                         best_distance = distance;
                         best_cluster = cluster;
                     }
                 }
-                assigments[global_idx] = best_cluster;
+                assigments[i] = best_cluster;
             }
         });
     });
@@ -181,8 +192,8 @@ void Device::_assign_clusters() {
 
 void Device::_gpu_reduction() {
     const int group_size     = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
-    const int attrs_per_pckg = attribute_size / PACKAGES;
-    const int remainder_pckg = attribute_size % PACKAGES;
+    const int attrs_per_pckg = attribute_size / REDUCTION_PACKAGES;
+    const int remainder_pckg = attribute_size % REDUCTION_PACKAGES;
 
     // clean matrices
     _queue.memset(counts, 0, count_bytes);
@@ -204,12 +215,12 @@ void Device::_gpu_reduction() {
         // sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> mean_package(mean_size, h);
         // sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> count_package(count_size, h);
 
-        h.parallel_for<class gpu_red>(nd_range(range(PACKAGES*group_size), range(group_size)), [=](nd_item<1> item){
+        h.parallel_for<class gpu_red>(nd_range(range(REDUCTION_PACKAGES*group_size), range(group_size)), [=](nd_item<1> item){
             const int grp_idx      = item.get_group(0);
             const int global_idx   = item.get_global_id(0);
             const int local_idx    = item.get_local_id(0);
             const int offset_gr    = attrs_per_pckg * grp_idx;
-            const int length_gr    = (global_idx == PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
+            const int length_gr    = (global_idx == REDUCTION_PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
             const int attrs_per_wi = length_gr / group_size;
             const int remainder_wi = length_gr % group_size;
             const int offset       = offset_gr + attrs_per_wi * local_idx;
@@ -256,8 +267,8 @@ void Device::_gpu_reduction() {
 
 
 void Device::_cpu_reduction() {
-    const int attrs_per_CU = attribute_size / PACKAGES;
-    const int remaining    = attribute_size % PACKAGES;
+    const int attrs_per_CU = attribute_size / REDUCTION_PACKAGES;
+    const int remaining    = attribute_size % REDUCTION_PACKAGES;
 
     // clean matrices
     _queue.memset(counts, 0, count_bytes);
@@ -277,10 +288,14 @@ void Device::_cpu_reduction() {
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> package(p_size, h);
         sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> p_count(c_size, h);
 
-        h.parallel_for<class cpu_red>(nd_range(range(PACKAGES), range(1)), [=](nd_item<1> item){
+        h.parallel_for<class cpu_red>(nd_range(range(REDUCTION_PACKAGES), range(1)), [=](nd_item<1> item){
             const int global_idx = item.get_global_id(0);
             const int offset     = attrs_per_CU * global_idx;
-            const int length     = (global_idx == PACKAGES-1) ? attrs_per_CU + remaining : attrs_per_CU;
+            const int length     = (global_idx == REDUCTION_PACKAGES-1) ? attrs_per_CU + remaining : attrs_per_CU;
+            float4 v_dim, v_pckg;
+
+            using global_ptr = sycl::multi_ptr<float, sycl::access::address_space::global_space>;
+            using local_ptr  = sycl::multi_ptr<float, sycl::access::address_space::local_space>;
 
             for(int i{0}; i < k; i++) {
                 p_count[i] = 0.0;
@@ -291,8 +306,13 @@ void Device::_cpu_reduction() {
             for (int i{offset}; i < offset + length; i++) {
                 int cluster = assigments[i];
                 p_count[cluster]++;
-                for(int d{0}; d < dims; d++)
-                    package[cluster * dims + d] += attrs[i * dims + d];
+                for(int d{0}; d < dims; d += 8) {
+                    v_dim.load(0, global_ptr(&attrs[i * dims + d]));
+                    v_pckg.load(0, local_ptr(&package[cluster * dims + d]));
+                    float4 result = v_dim + v_pckg;
+                    //package[cluster * dims + d] += attrs[i * dims + d];
+                    result.store(0, local_ptr(&package[cluster * dims + d]));
+                }
             }
 
             for(int cluster{0}; cluster < k; cluster++) {
