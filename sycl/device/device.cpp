@@ -317,7 +317,8 @@ void Device::_cpu_reduction() {
             for (int i{offset}; i < offset + length; i++) {
                 int cluster = assigments[i];
                 p_count[cluster]++;
-                for(int d{0}; d < dims && d + simd_width < dims; d += simd_width) {
+                for(int i{simd_width}; i < dims; i += simd_width) {
+                    int d = i - simd_width;
                     v_dim.load(0, global_ptr(&attrs[i * dims + d]));
                     v_pckg.load(0, local_ptr(&package[cluster * dims + d]));
                     sycl::vec<float, simd_width> result = v_dim + v_pckg;

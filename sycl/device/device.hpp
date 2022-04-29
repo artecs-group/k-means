@@ -6,8 +6,8 @@
 #include <string>
 #include <CL/sycl.hpp>
 
-#define REDUCTION_PACKAGES 80
-#define ASSIGN_PACKAGES 8
+#define REDUCTION_PACKAGES 16
+#define ASSIGN_PACKAGES 32
 
 using namespace cl::sycl;
 
