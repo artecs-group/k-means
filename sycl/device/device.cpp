@@ -144,14 +144,14 @@ void Device::_sync() {
 
 
 void Device::_assign_clusters() {
-    const int simd_width     = 4; //check that simd_width < dims
+    constexpr int B          = 2;
+    const int simd_width     = 8; //check that simd_width < dims
     const int simd_reminder  = dims % simd_width;
     const int group_size     = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
     const int attrs_per_pckg = attribute_size / ASSIGN_PACKAGES;
     const int remainder_pckg = attribute_size % ASSIGN_PACKAGES;
 
     _queue.submit([&](handler& h) {
-        int attrs_size = this-> attribute_size;
         int k = this->k;
         int dims = this->dims;
         float* attrs = this->attributes;
@@ -165,36 +165,50 @@ void Device::_assign_clusters() {
 
             using global_ptr = sycl::multi_ptr<float, sycl::access::address_space::global_space>;
 
-            sycl::vec<float, simd_width> v_attr, v_mean, result;
+            sycl::vec<float, simd_width> v_attr, v_mean;
+            sycl::vec<float, simd_width> result[B];
             float best_distance{FLT_MAX};
             int best_cluster{-1};
             float distance{0};
 
             for(int i = offset; i < offset + length; i++) {
                 best_distance = FLT_MAX;
-                for (int cluster = 0; cluster < k; ++cluster) {
-                    distance = 0;
+                best_cluster  = -1;
+                for (int cluster = 0; cluster < k; cluster++) {
+
+                    //vector var initialization
+                    for (size_t i = 0; i < simd_width; i++)
+                        #pragma unroll(B)
+                        for (size_t j = 0; j < B; j++)
+                            result[j][i] = 0;
 
                     // calculate simd squared_l2_distance
-                    for(int d{0}; d < dims / simd_width; d++) {
-                        v_attr.load(0, global_ptr(&attrs[(i * dims) + d]));
-                        v_mean.load(0, global_ptr(&mean[(cluster * dims) + d]));
-                        result  = v_attr - v_mean;
-                        result *= result;
+                    for(int d{0}; d < dims / simd_width; d += B) {
+                        #pragma unroll(B)
+                        for(int j{0}; j < B; j++) {
+                            v_attr.load(0, global_ptr(&attrs[(i * dims) + d + j]));
+                            v_mean.load(0, global_ptr(&mean[(cluster * dims) + d + j]));
+                            v_attr    = v_attr - v_mean;
+                            result[j] = result[j] + v_attr * v_attr;
+                        }
                     }
 
+                    #pragma unroll(B-1)
+                    for (size_t i = 1; i < B; i++)
+                        result[0] += result[i];
+                    
                     // reduce simd lane in scalar
                     for(int i{0}; i < simd_width; i++)
-                        distance += result[i];
+                        distance += result[0][i];
 
                     // calculate remaining values
                     for(int d{dims - simd_reminder}; d < dims; d++)
                         distance += squared_l2_distance(attrs[(i * dims) + d], mean[(cluster * dims) + d]);
 
-                    if (distance < best_distance) {
-                        best_distance = distance;
-                        best_cluster = cluster;
-                    }
+                    bool best     = distance < best_distance;
+                    best_distance = best ? distance : best_distance;
+                    best_cluster  = best ? cluster  : best_cluster;
+                    distance      = 0;
                 }
                 assigments[i] = best_cluster;
             }
