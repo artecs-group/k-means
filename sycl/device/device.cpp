@@ -158,12 +158,12 @@ void Device::_assign_clusters() {
         float* mean = this->mean;
         int* assigments = this->assigments;
 
-        h.parallel_for<class assign_clusters>(nd_range(range(ASSIGN_PACKAGES), range(1)), [=](nd_item<1> item){
-            const int global_idx = item.get_global_id(0);
-            const int offset     = attrs_per_pckg * global_idx;
-            const int length     = (global_idx == ASSIGN_PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
+        using global_ptr = sycl::multi_ptr<float, sycl::access::address_space::global_space>;
 
-            using global_ptr = sycl::multi_ptr<float, sycl::access::address_space::global_space>;
+        h.parallel_for<class assign_clusters>(nd_range(range(ASSIGN_PACKAGES), range(1)), [=](nd_item<1> item){
+            int global_idx = item.get_global_id(0);
+            int offset     = attrs_per_pckg * global_idx;
+            int length     = (global_idx == ASSIGN_PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
 
             sycl::vec<float, simd_width> v_attr, v_mean;
             sycl::vec<float, simd_width> result[B];
@@ -174,17 +174,15 @@ void Device::_assign_clusters() {
             for(int i = offset; i < offset + length; i++) {
                 best_distance = FLT_MAX;
                 best_cluster  = -1;
-                for (int cluster = 0; cluster < k; cluster++) {
 
+                for (int cluster = 0; cluster < k; cluster++) {
                     //vector var initialization
-                    for (size_t i = 0; i < simd_width; i++)
-                        #pragma unroll(B)
-                        for (size_t j = 0; j < B; j++)
-                            result[j][i] = 0;
+                    //for (size_t i = 0; i < simd_width; i++)
+                    for (size_t j = 0; j < B; j++)
+                        result[j] = {0};
 
                     // calculate simd squared_l2_distance
                     for(int d{0}; d < dims / simd_width; d += B) {
-                        #pragma unroll(B)
                         for(int j{0}; j < B; j++) {
                             v_attr.load(0, global_ptr(&attrs[(i * dims) + d + j]));
                             v_mean.load(0, global_ptr(&mean[(cluster * dims) + d + j]));
@@ -193,7 +191,6 @@ void Device::_assign_clusters() {
                         }
                     }
 
-                    #pragma unroll(B-1)
                     for (size_t i = 1; i < B; i++)
                         result[0] += result[i];
                     
@@ -205,9 +202,8 @@ void Device::_assign_clusters() {
                     for(int d{dims - simd_reminder}; d < dims; d++)
                         distance += squared_l2_distance(attrs[(i * dims) + d], mean[(cluster * dims) + d]);
 
-                    bool best     = distance < best_distance;
-                    best_distance = best ? distance : best_distance;
-                    best_cluster  = best ? cluster  : best_cluster;
+                    best_distance = sycl::min<float>(distance, best_distance);
+                    best_cluster  = distance == best_distance ? cluster : best_cluster;
                     distance      = 0;
                 }
                 assigments[i] = best_cluster;
@@ -290,7 +286,7 @@ void Device::_gpu_reduction() {
 
 
 void Device::_cpu_reduction() {
-    const int simd_width    = 4; //check that simd_width < dims
+    const int simd_width    = 8; //check that simd_width < dims
     const int simd_reminder = dims % simd_width;
     const int attrs_per_CU  = attribute_size / REDUCTION_PACKAGES;
     const int remaining     = attribute_size % REDUCTION_PACKAGES;
@@ -317,7 +313,7 @@ void Device::_cpu_reduction() {
             const int global_idx = item.get_global_id(0);
             const int offset     = attrs_per_CU * global_idx;
             const int length     = (global_idx == REDUCTION_PACKAGES-1) ? attrs_per_CU + remaining : attrs_per_CU;
-            sycl::vec<float, simd_width> v_dim, v_pckg;
+            sycl::vec<float, simd_width> v_pckg, result;
 
             using global_ptr = sycl::multi_ptr<float, sycl::access::address_space::global_space>;
             using local_ptr  = sycl::multi_ptr<float, sycl::access::address_space::local_space>;
@@ -333,9 +329,10 @@ void Device::_cpu_reduction() {
                 p_count[cluster]++;
                 for(int i{simd_width}; i < dims; i += simd_width) {
                     int d = i - simd_width;
-                    v_dim.load(0, global_ptr(&attrs[i * dims + d]));
+                    v_pckg.load(0, global_ptr(&attrs[i * dims + d]));
+                    result = v_pckg;
                     v_pckg.load(0, local_ptr(&package[cluster * dims + d]));
-                    sycl::vec<float, simd_width> result = v_dim + v_pckg;
+                    result += v_pckg;
                     result.store(0, local_ptr(&package[cluster * dims + d]));
                 }
                 // calculate remaining dims
