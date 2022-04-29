@@ -327,10 +327,8 @@ void Device::_cpu_reduction() {
             for (int i{offset}; i < offset + length; i++) {
                 int cluster = assigments[i];
                 p_count[cluster]++;
-                for(int j{simd_width}; j < dims; j += simd_width) {
-                    int d = j - simd_width;
-                    v_pckg.load(0, global_ptr(&attrs[i * dims + d]));
-                    result = v_pckg;
+                for(int d{0}; d < dims - simd_reminder; d += simd_width) {
+                    result.load(0, global_ptr(&attrs[i * dims + d]));
                     v_pckg.load(0, local_ptr(&package[cluster * dims + d]));
                     result += v_pckg;
                     result.store(0, local_ptr(&package[cluster * dims + d]));
