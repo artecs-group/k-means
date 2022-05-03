@@ -8,6 +8,8 @@
 
 #define REDUCTION_PACKAGES 16
 #define ASSIGN_PACKAGES 32
+#define ASSIGN_GROUP_SIZE_CPU 1
+#define ASSIGN_GROUP_SIZE_GPU 8
 
 using namespace cl::sycl;
 
