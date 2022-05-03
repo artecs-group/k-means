@@ -150,10 +150,10 @@ void Device::_assign_clusters() {
     constexpr int group_size = ASSIGN_GROUP_SIZE_GPU;
 #endif
     constexpr int B          = 2;
-    const int simd_width     = 8; //check that simd_width < dims
+    const int simd_width     = 4; //check that simd_width < dims
     const int simd_remainder = dims % simd_width;
-    int attrs_per_pckg = attribute_size / ASSIGN_PACKAGES;
-    int remainder_pckg = attribute_size % ASSIGN_PACKAGES;
+    const int attrs_per_pckg = attribute_size / ASSIGN_PACKAGES;
+    const int remainder_pckg = attribute_size % ASSIGN_PACKAGES;
 
     _queue.submit([&](handler& h) {
         int k              = this->k;
@@ -170,22 +170,22 @@ void Device::_assign_clusters() {
             int offset     = attrs_per_pckg * global_idx;
             int length     = (global_idx == ASSIGN_PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
 #else
-            int offset         = attrs_per_pckg * item.get_group(0);
-            int length         = (item.get_global_id(0) == ASSIGN_PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
-            int attrs_per_pckg = length / group_size;
-            int remainder_pckg = length % group_size;
-            offset             = offset + attrs_per_pckg * item.get_local_id(0);
-            length             = (item.get_local_id(0) == group_size-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
+            int offset       = attrs_per_pckg * item.get_group(0);
+            int length       = (item.get_group(0) == ASSIGN_PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
+            int attrs_per_wi = length / group_size;
+            int remainder_wi = length % group_size;
+            offset           = offset + attrs_per_wi * item.get_local_id(0);
+            length           = (item.get_local_id(0) == group_size-1) ? attrs_per_wi + remainder_wi : attrs_per_wi;
 #endif
             sycl::vec<float, simd_width> v_attr, v_mean;
             sycl::vec<float, simd_width> result[B];
             float best_distance{FLT_MAX};
-            int best_cluster{-1};
+            int best_cluster{0};
             float distance{0};
 
             for(int i = offset; i < offset + length; i++) {
                 best_distance = FLT_MAX;
-                best_cluster  = -1;
+                best_cluster  = 0;
 
                 for (int cluster = 0; cluster < k; cluster++) {
                     //vector var initialization
@@ -215,7 +215,7 @@ void Device::_assign_clusters() {
                         distance += squared_l2_distance(attrs[(i * dims) + d], mean[(cluster * dims) + d]);
 
                     best_distance = sycl::min<float>(distance, best_distance);
-                    best_cluster  = distance == best_distance ? cluster : best_cluster;
+                    best_cluster  = distance < best_distance ? cluster : best_cluster;
                     distance      = 0;
                 }
                 assigments[i] = best_cluster;
@@ -227,12 +227,14 @@ void Device::_assign_clusters() {
 
 void Device::_gpu_reduction() {
     const int group_size     = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
-    int attrs_per_pckg = attribute_size / REDUCTION_PACKAGES;
-    int remainder_pckg = attribute_size % REDUCTION_PACKAGES;
+    const int attrs_per_pckg = attribute_size / REDUCTION_PACKAGES;
+    const int remainder_pckg = attribute_size % REDUCTION_PACKAGES;
 
     // clean matrices
     _queue.memset(counts, 0, count_bytes);
     _queue.memset(mean, 0, mean_bytes);
+    _queue.memset(count_package, 0, group_size * count_bytes);
+    _queue.memset(mean_package, 0, group_size * mean_bytes);
     _sync();
 
     _queue.submit([&](handler& h) {
@@ -246,20 +248,13 @@ void Device::_gpu_reduction() {
         float* mean_package         = this->mean_package;
 
         h.parallel_for<class gpu_red>(nd_range(range(REDUCTION_PACKAGES*group_size), range(group_size)), [=](nd_item<1> item){
-            int local_idx      = item.get_local_id(0);
-            int offset         = attrs_per_pckg * item.get_group(0);
-            int length         = (item.get_global_id(0) == REDUCTION_PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
-            int attrs_per_pckg = length / group_size;
-            int remainder_pckg = length % group_size;
-            offset             = offset + attrs_per_pckg * local_idx;
-            length             = (local_idx == group_size-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
-
-            // init memory each work item inits its own memory section
-            for(int cluster{0}; cluster < k; cluster++) {
-                count_package[local_idx * k + cluster] = 0;
-                for(int d{0}; d < dims; d++)
-                    mean_package[local_idx * k * dims + cluster * dims + d] = 0;
-            }
+            int local_idx    = item.get_local_id(0);
+            int offset       = attrs_per_pckg * item.get_group(0);
+            int length       = (item.get_group(0) == REDUCTION_PACKAGES-1) ? attrs_per_pckg + remainder_pckg : attrs_per_pckg;
+            int attrs_per_wi = length / group_size;
+            int remainder_wi = length % group_size;
+            offset           = offset + attrs_per_wi * local_idx;
+            length           = (local_idx == group_size-1) ? attrs_per_wi + remainder_wi : attrs_per_wi;
 
             // perform work item private sum 
             for (int i{offset}; i < offset + length; i++) {
