@@ -177,17 +177,17 @@ void Device::_assign_clusters() {
 
                 for (int cluster = 0; cluster < k; cluster++) {
                     //vector var initialization
-                    //for (size_t i = 0; i < simd_width; i++)
                     for (size_t j = 0; j < B; j++)
                         result[j] = {0};
 
                     // calculate simd squared_l2_distance
-                    for(int d{0}; d < dims / simd_width; d += B) {
-                        for(int j{0}; j < B; j++) {
+                    for(int d{0}; d < dims - simd_reminder; d += simd_width*B) {
+                        for(int j{0}; j < simd_width*B; j += simd_width) {
+                            int res_idx = j / simd_width;
                             v_attr.load(0, global_ptr(&attrs[(i * dims) + d + j]));
                             v_mean.load(0, global_ptr(&mean[(cluster * dims) + d + j]));
-                            v_attr    = v_attr - v_mean;
-                            result[j] = result[j] + v_attr * v_attr;
+                            v_attr          = v_attr - v_mean;
+                            result[res_idx] = result[res_idx] + v_attr * v_attr;
                         }
                     }
 
@@ -286,7 +286,8 @@ void Device::_gpu_reduction() {
 
 
 void Device::_cpu_reduction() {
-    const int simd_width    = 8; //check that simd_width < dims
+    constexpr int B         = 2;
+    const int simd_width    = 4; //check that simd_width < dims
     const int simd_reminder = dims % simd_width;
     const int attrs_per_CU  = attribute_size / REDUCTION_PACKAGES;
     const int remaining     = attribute_size % REDUCTION_PACKAGES;
@@ -327,6 +328,7 @@ void Device::_cpu_reduction() {
             for (int i{offset}; i < offset + length; i++) {
                 int cluster = assigments[i];
                 p_count[cluster]++;
+                
                 for(int d{0}; d < dims - simd_reminder; d += simd_width) {
                     result.load(0, global_ptr(&attrs[i * dims + d]));
                     v_pckg.load(0, local_ptr(&package[cluster * dims + d]));
