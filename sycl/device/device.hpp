@@ -7,9 +7,9 @@
 #include <CL/sycl.hpp>
 
 #define REDUCTION_PACKAGES 16
-#define ASSIGN_PACKAGES 32
+#define ASSIGN_PACKAGES 16
 #define ASSIGN_GROUP_SIZE_CPU 1
-#define ASSIGN_GROUP_SIZE_GPU 8
+#define ASSIGN_GROUP_SIZE_GPU 256
 
 using namespace cl::sycl;
 
@@ -51,8 +51,7 @@ class Device {
         sycl::queue _queue;
 
         float *attributes{nullptr}, *mean{nullptr}, *mean_package{nullptr};
-        unsigned int *counts{nullptr}, *count_package{nullptr};
-        int* assigments{nullptr};
+        unsigned int *counts{nullptr}, *count_package{nullptr}, *assigments{nullptr};
         int dims{0}, k{0}, attribute_size{0}, attribute_bytes{0}, mean_bytes{0}, 
             count_bytes{0}, attribute_size_pad{0}, group_size{0}, work_items{0}, groups{0};
 
