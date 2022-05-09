@@ -25,7 +25,11 @@ int main(int argc, const char* argv[]) {
         float val;
         for(int j{0}; j < dims; j++) {
             line_stream >> val;
+#if defined(NVIDIA_DEVICE)
+            h_attrs[j*n_points + i] = val;
+#else
             h_attrs[i*dims + j] = val;
+#endif
         }
     }
 
