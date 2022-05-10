@@ -26,11 +26,11 @@ Device::Device(int _k, int _dims, int length, std::vector<float>& h_attrs): k(_k
     mean          = malloc_device<float>(mean_bytes, _queue);
     counts        = malloc_device<unsigned int>(count_bytes, _queue);
     assigments    = malloc_device<unsigned int>(attribute_size * sizeof(unsigned int), _queue);
-#if defined(INTEL_GPU_DEVICE)
-    const int group_size = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
-    mean_package  = malloc_device<float>(REDUCTION_PACKAGES * group_size * mean_bytes, _queue);
-    count_package = malloc_device<unsigned int>(REDUCTION_PACKAGES * group_size * count_bytes, _queue);
-#endif
+// #if defined(INTEL_GPU_DEVICE)
+//     const int group_size = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
+//     mean_package  = malloc_device<float>(REDUCTION_PACKAGES * group_size * mean_bytes, _queue);
+//     count_package = malloc_device<unsigned int>(REDUCTION_PACKAGES * group_size * count_bytes, _queue);
+// #endif
 
     _queue.memcpy(attributes, h_attrs.data(), attribute_bytes);
 
@@ -44,28 +44,28 @@ Device::Device(int _k, int _dims, int length, std::vector<float>& h_attrs): k(_k
     for(int i{0}; i < k; i++) {
         do { idx = indices(rng); } while(idxs.find(idx) != idxs.end());
         idxs.insert(idx);
-        for(int j{0}; j < dims; j++)
-#if defined(NVIDIA_DEVICE)
-            h_mean.push_back(h_attrs[j * attribute_size + idx]);
-#else
-            h_mean.push_back(h_attrs[idx * dims + j]);
-#endif
+        for(int d{0}; d < dims; d++) {
+// #if defined(NVIDIA_DEVICE)
+            h_mean.push_back(h_attrs[d * attribute_size + idx]);
+// #else
+//             h_mean.push_back(h_attrs[idx * dims + d]);
+// #endif
+        }
     }
 
     _queue.memcpy(mean, h_mean.data(), mean_bytes);
     _queue.memset(counts, 0, count_bytes);
-    _queue.memset(assigments, 0, attribute_size * sizeof(int));
-
+    _queue.memset(assigments, 0, attribute_size * sizeof(unsigned int));
     _sync();
 }
 
 
 Device::~Device() {
-	if(attributes != nullptr) free(attributes, _queue);
-	if(mean != nullptr)       free(mean, _queue);
-	if(counts != nullptr)     free(counts, _queue);
-    if(assigments != nullptr) free(assigments, _queue);
-    if(mean_package != nullptr) free(mean_package, _queue);
+	if(attributes != nullptr)    free(attributes, _queue);
+	if(mean != nullptr)          free(mean, _queue);
+	if(counts != nullptr)        free(counts, _queue);
+    if(assigments != nullptr)    free(assigments, _queue);
+    if(mean_package != nullptr)  free(mean_package, _queue);
     if(count_package != nullptr) free(count_package, _queue);
 }
 
@@ -92,23 +92,23 @@ void Device::run_k_means(int iterations) {
     float t_assign{0}, t_reduction{0}, t_mean{0};
     for (size_t i{0}; i < iterations; i++) {
         start = std::chrono::high_resolution_clock::now();
-#if defined(NVIDIA_DEVICE)
+// #if defined(NVIDIA_DEVICE)
         _assign_clusters_nvidia();
-#else
-        _assign_clusters();
-#endif
+// #else
+//         _assign_clusters();
+// #endif
         _sync();
         end = std::chrono::high_resolution_clock::now();
         t_assign += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
 
         start = std::chrono::high_resolution_clock::now();
-#if defined(CPU_DEVICE)
-        _cpu_reduction();
-#elif defined(NVIDIA_DEVICE)
+// #if defined(CPU_DEVICE)
+//         _cpu_reduction();
+// #elif defined(NVIDIA_DEVICE)
         _nvidia_reduction();
-#else
-        _gpu_reduction();
-#endif
+// #else
+//         _gpu_reduction();
+// #endif
         _sync();
         end = std::chrono::high_resolution_clock::now();
         t_reduction += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
@@ -276,7 +276,8 @@ void Device::_nvidia_reduction() {
     const int attr_pckg      = attribute_size / REDUCTION_ATTRIBUTES_PCKG + (remainder_attr == 0 ? 0 : 1);
     const int remainder_dims = dims % REDUCTION_DIMS_PCKG;
     const int dims_pckg      = dims / REDUCTION_DIMS_PCKG + (remainder_dims == 0 ? 0 : 1);
-    sycl::range<2> blocks(attr_pckg, dims_pckg), group_size(REDUCTION_ATTRIBUTES_PCKG, REDUCTION_DIMS_PCKG);
+    sycl::range<2> group_size(REDUCTION_ATTRIBUTES_PCKG, REDUCTION_DIMS_PCKG);
+    sycl::range<2> global(attr_pckg * REDUCTION_ATTRIBUTES_PCKG, dims_pckg * REDUCTION_DIMS_PCKG);
 
     // clean matrices
     _queue.memset(counts, 0, count_bytes);
@@ -297,51 +298,48 @@ void Device::_nvidia_reduction() {
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> mean_package(size_mean, h);
         sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> count_package(size_count, h);
 
-        h.parallel_for<class gpu_nvidia_red>(nd_range(blocks*group_size, group_size), [=](nd_item<2> item){
+        h.parallel_for<class gpu_nvidia_red>(nd_range<2>(global, group_size), [=](nd_item<2> item){
             int global_idx = item.get_global_id(0);
             int global_idy = item.get_global_id(1);
             int local_idx  = item.get_local_id(0);
             int local_idy  = item.get_local_id(1);
 
-            if(global_idx >= attribute_size || global_idy >= dims)
-                return;
+            if(global_idx < attribute_size && global_idy < dims) {
+                // int cluster = assigments[global_idx];
+                // if(local_idy == 0) {
+                //     for(int c{0}; c < k; c++)
+                //         count_package[local_idx * k + c] = 0;
+                //     count_package[local_idx * k + cluster] = 1;
+                // }
+                // for(int c{0}; c < k; c++)
+                //     mean_package[local_idx * item.get_local_range(1) * k + local_idy * k + c] = 0;
+                // mean_package[local_idx * item.get_local_range(1) * k + local_idy * k + cluster] = attrs[global_idy * attribute_size + global_idx];
 
-            int cluster = assigments[global_idx];
-            if(local_idx == 0) {
-                for(int c{0}; c < k; c++)
-                    count_package[local_idx * k + c] = 0;
-                count_package[local_idx * k + cluster] = 1;
-            }
-            for(int c{0}; c < k; c++)
-                mean_package[local_idx * item.get_local_range(1) * k + local_idy * k + c] = 0;
-            mean_package[local_idx * item.get_local_range(1) * k + local_idy * k + cluster] = attrs[local_idy * attribute_size + global_idx];
+                // item.barrier(sycl::access::fence_space::local_space);
 
-            item.barrier(sycl::access::fence_space::local_space);
+                // // perform work group local sum with a tree reduction
+                // for(int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
+                //     if(local_idx < stride) {
+                //         for(int c{0}; c < k; c++) {
+                //             count_package[local_idx * k + c] += count_package[(local_idx + stride) * k + c];
 
-            // perform work group local sum with a tree reduction
-            for(int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
-                item.barrier(sycl::access::fence_space::local_space);
-                if(local_idx < stride) {
-                    for(int c{0}; c < k; c++) {
-                        count_package[local_idx * k + c] += count_package[(local_idx + stride) * k + c];
+                //             if(local_idy == 0) {
+                //                 for(int d{1}; d < item.get_local_range(1); d++)
+                //                     mean_package[(local_idx + stride) * item.get_local_range(1) * k + c] += mean_package[(local_idx + stride) * item.get_local_range(1) * k + d * k + c];
+                //             }
+                //         }
+                //     }
+                //     item.barrier(sycl::access::fence_space::local_space);
+                // }
 
-                        for(int stride_y = item.get_local_range(1) >> 1; stride_y > 0; stride_y >>= 1) {
-                            if(local_idy < stride_y){
-                                for(int d{0}; d < item.get_local_range(1); d++)
-                                    mean_package[local_idx * item.get_local_range(1) * k + local_idy * k + c] += mean_package[(local_idx + stride) * item.get_local_range(1) * k + (local_idy + stride_y) * k + c];
-                            }
-                        }
-                    }
-                }
-            }
-
-            // perform global sum
-            if(local_idx == 0 && local_idy == 0) {
-                for(int c{0}; c < k; c++) {
-                    sycl::atomic<unsigned int>(sycl::global_ptr<unsigned int>(&counts[c])).fetch_add(count_package[c]);
-                    for(int d{0}; d < item.get_local_range(1); d++)
-                        dpct::atomic_fetch_add(&mean[c * dims + d], mean_package[d * k + c]); 
-                }
+                // // perform global sum
+                // if(local_idx == 0 && local_idy == 0) {
+                //     for(int c{0}; c < k; c++) {
+                //         sycl::atomic<unsigned int>(sycl::global_ptr<unsigned int>(&counts[c])).fetch_add(count_package[c]);
+                //         for(int d{0}; d < item.get_local_range(1); d++)
+                //             dpct::atomic_fetch_add(&mean[c * dims + d], mean_package[d * k + c]); 
+                //     }
+                // }
             }
         });
     });
@@ -437,7 +435,7 @@ void Device::_gpu_reduction() {
 
 
 void Device::_cpu_reduction() {
-    const int simd_width    = 4; //check that simd_width < dims
+    const int simd_width    = 8; //check that simd_width < dims
     const int simd_remainder = dims % simd_width;
     const int attrs_per_CU  = attribute_size / REDUCTION_PACKAGES;
     const int remaining     = attribute_size % REDUCTION_PACKAGES;
