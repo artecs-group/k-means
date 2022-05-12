@@ -6,12 +6,12 @@
 #include <string>
 #include <CL/sycl.hpp>
 
-// for nvidia 
-#define REDUCTION_ATTRIBUTES_PCKG 128
-#define REDUCTION_DIMS_PCKG 4
+#define RED_ATTRS_PACK_NVIDIA 128
+#define RED_DIMS_PACK_NVIDIA 4
+#define RED_ATTRS_PACK 16
+#define RED_DIMS_PACK_IGPU 4
 
-#define REDUCTION_PACKAGES 16
-#define ASSIGN_PACKAGES 16
+#define ASSIGN_PACK 16
 #define ASSIGN_GROUP_SIZE_CPU 1
 #define ASSIGN_GROUP_SIZE_GPU 256
 
@@ -64,7 +64,7 @@ class Device {
         void _assign_clusters();
         void _assign_clusters_nvidia();
         void _cpu_reduction();
-        void _gpu_reduction();
+        void _intel_gpu_reduction();
         void _nvidia_reduction();
         void _compute_mean();
         std::tuple<int,int,int> _get_group_work_items(int elements);
