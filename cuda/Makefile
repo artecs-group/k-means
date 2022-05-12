@@ -6,7 +6,7 @@ GPUCC = /usr/local/cuda/bin/nvcc
 # For GTX 1080
 # CUDA_TARGET_FLAGS = --gpu-architecture=sm_61
 
-CXXFLAGS = -O3 #-DDP
+CXXFLAGS = -O3 -w #-DDP
 CXXFLAGS += -I/usr/local/cuda/include/
 #CC_CXXFLAGS = -Ofast -fopenmp -funroll-loops -march=skylake-avx512 #-march=native
 CC_CXXFLAGS = -xhost -qopenmp

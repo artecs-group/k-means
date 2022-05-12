@@ -2,11 +2,11 @@
 /* Define constants                                                                        */
 /*-----------------------------------------------------------------------------------------*/
 // Benchmark dataset
-#define NbPoints    2049280      // Number of data instances
-#define NbDims      7             // Number of dimensions
-#define NbClusters  4             // Number of clusters
+#define NbPoints    2458285      // Number of data instances
+#define NbDims      68             // Number of dimensions
+#define NbClusters  16             // Number of clusters
 #define NbPackages  100           // Number of packages used for UpdateCentroids
-#define INPUT_DATA                "../data/household_power_consumption.txt"
+#define INPUT_DATA                "../data/USCensus1990.data.txt"
 #define INPUT_INITIAL_CENTROIDS   ""   // Optional
 
 // Adjustable block size
