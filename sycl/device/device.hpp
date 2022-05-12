@@ -7,7 +7,7 @@
 #include <CL/sycl.hpp>
 
 // for nvidia 
-#define REDUCTION_ATTRIBUTES_PCKG 32
+#define REDUCTION_ATTRIBUTES_PCKG 128
 #define REDUCTION_DIMS_PCKG 4
 
 #define REDUCTION_PACKAGES 16

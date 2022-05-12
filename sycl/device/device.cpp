@@ -273,11 +273,13 @@ void Device::_assign_clusters_nvidia() {
 
 void Device::_nvidia_reduction() {
     const int remainder_attr = attribute_size % REDUCTION_ATTRIBUTES_PCKG;
-    const int attr_pckg      = attribute_size / REDUCTION_ATTRIBUTES_PCKG + (remainder_attr == 0 ? 0 : 1);
+    const int quotient_attr  = attribute_size / REDUCTION_ATTRIBUTES_PCKG;
+    const int attr_pckg      = quotient_attr + (remainder_attr == 0 ? 0 : 1);
     const int remainder_dims = dims % REDUCTION_DIMS_PCKG;
-    const int dims_pckg      = dims / REDUCTION_DIMS_PCKG + (remainder_dims == 0 ? 0 : 1);
-    sycl::range<2> group_size(REDUCTION_ATTRIBUTES_PCKG, REDUCTION_DIMS_PCKG);
-    sycl::range<2> global(attr_pckg * REDUCTION_ATTRIBUTES_PCKG, dims_pckg * REDUCTION_DIMS_PCKG);
+    const int quotient_dims  = dims / REDUCTION_DIMS_PCKG;
+    const int dims_pckg      = quotient_dims + (remainder_dims == 0 ? 0 : 1);
+    sycl::range<2> group_size(REDUCTION_DIMS_PCKG, REDUCTION_ATTRIBUTES_PCKG);
+    sycl::range<2> groups(dims_pckg, attr_pckg);
 
     // clean matrices
     _queue.memset(counts, 0, count_bytes);
@@ -292,54 +294,55 @@ void Device::_nvidia_reduction() {
         float* mean                 = this->mean;
         unsigned int* assigments    = this->assigments;
         unsigned int* counts        = this->counts;
-        size_t size_mean            = REDUCTION_ATTRIBUTES_PCKG * REDUCTION_DIMS_PCKG * k * sizeof(float);
-        size_t size_count           = REDUCTION_ATTRIBUTES_PCKG * k * sizeof(float);
+        size_t size_mean            = REDUCTION_DIMS_PCKG * REDUCTION_ATTRIBUTES_PCKG * sizeof(float);
+        size_t size_label           = REDUCTION_ATTRIBUTES_PCKG * sizeof(float);
 
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> mean_package(size_mean, h);
-        sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> count_package(size_count, h);
+        sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> label_package(size_label, h);
 
-        h.parallel_for<class gpu_nvidia_red>(nd_range<2>(global, group_size), [=](nd_item<2> item){
-            int global_idx = item.get_global_id(0);
-            int global_idy = item.get_global_id(1);
-            int local_idx  = item.get_local_id(0);
-            int local_idy  = item.get_local_id(1);
+        h.parallel_for<class gpu_nvidia_red>(nd_range<2>(groups*group_size, group_size), [=](nd_item<2> item){
+            int gid_x   = item.get_group(1);
+            int baseRow = item.get_group(0) * REDUCTION_DIMS_PCKG; // Base row of the block
+            int row     = baseRow + item.get_local_id(0); // Row of child thread
+            int baseCol = gid_x * REDUCTION_ATTRIBUTES_PCKG; // Base column of the block
+            int col     = baseCol + item.get_local_id(1); // Column of child thread
+            int cltIdx  = item.get_local_id(0) * REDUCTION_ATTRIBUTES_PCKG + item.get_local_id(1); // 1D cluster index
+            
+            // Add one element per group from the remaining elements
+            int offset = (gid_x < remainder_attr ? ((quotient_attr + 1) * gid_x) : (quotient_attr * gid_x + remainder_attr));
+            int length = (gid_x < remainder_attr ? (quotient_attr + 1) : quotient_attr);
 
-            if(global_idx < attribute_size && global_idy < dims) {
-                // int cluster = assigments[global_idx];
-                // if(local_idy == 0) {
-                //     for(int c{0}; c < k; c++)
-                //         count_package[local_idx * k + c] = 0;
-                //     count_package[local_idx * k + cluster] = 1;
-                // }
-                // for(int c{0}; c < k; c++)
-                //     mean_package[local_idx * item.get_local_range(1) * k + local_idy * k + c] = 0;
-                // mean_package[local_idx * item.get_local_range(1) * k + local_idy * k + cluster] = attrs[global_idy * attribute_size + global_idx];
+            // Load the values and cluster labels of instances into shared memory
+            if (col < (offset + length) && row < dims) {
+                mean_package[item.get_local_id(0) * REDUCTION_DIMS_PCKG + item.get_local_id(1)] = attrs[row * attribute_size + col];
+                if (item.get_local_id(0) == 0)
+                    label_package[item.get_local_id(1)] = assigments[col];
+            }
+            item.barrier(sycl::access::fence_space::local_space);
 
-                // item.barrier(sycl::access::fence_space::local_space);
+            // Compute partial evolution of centroid related to cluster number 'cltIdx'
+            if (cltIdx < k) {  // Required condition: k <= REDUCTION_ATTRIBUTES_PCKG * REDUCTION_DIMS_PCKG <= 1024
+                float sum[REDUCTION_DIMS_PCKG] = {0};
+                unsigned int count = 0;
 
-                // // perform work group local sum with a tree reduction
-                // for(int stride = item.get_local_range(0) >> 1; stride > 0; stride >>= 1) {
-                //     if(local_idx < stride) {
-                //         for(int c{0}; c < k; c++) {
-                //             count_package[local_idx * k + c] += count_package[(local_idx + stride) * k + c];
+                // Accumulate contributions to cluster number 'cltIdx'
+                // the second for condition is set for the last block to avoid out of bounds
+                for (int x{0}; x < REDUCTION_ATTRIBUTES_PCKG && (baseCol + x) < (offset + length); x++) {
+                    if (label_package[x] == cltIdx) {
+                        count++;
+                        for (int y{0}; y < REDUCTION_DIMS_PCKG && (baseRow + y) < dims; y++)
+                            sum[y] += mean_package[y * REDUCTION_ATTRIBUTES_PCKG + x];
+                    }
+                }
 
-                //             if(local_idy == 0) {
-                //                 for(int d{1}; d < item.get_local_range(1); d++)
-                //                     mean_package[(local_idx + stride) * item.get_local_range(1) * k + c] += mean_package[(local_idx + stride) * item.get_local_range(1) * k + d * k + c];
-                //             }
-                //         }
-                //     }
-                //     item.barrier(sycl::access::fence_space::local_space);
-                // }
-
-                // // perform global sum
-                // if(local_idx == 0 && local_idy == 0) {
-                //     for(int c{0}; c < k; c++) {
-                //         sycl::atomic<unsigned int>(sycl::global_ptr<unsigned int>(&counts[c])).fetch_add(count_package[c]);
-                //         for(int d{0}; d < item.get_local_range(1); d++)
-                //             dpct::atomic_fetch_add(&mean[c * dims + d], mean_package[d * k + c]); 
-                //     }
-                // }
+                // Add block contribution to global mem
+                if (count != 0) {
+                    if (item.get_group(0) == 0)
+                        sycl::atomic<unsigned int>(sycl::global_ptr<unsigned int>(&counts[cltIdx])).fetch_add(count);
+                    int dmax = (item.get_group(0) == quotient_dims ? remainder_dims : REDUCTION_DIMS_PCKG);
+                    for (int j{0}; j < dmax; j++)  //number of dimensions managed by block
+                        dpct::atomic_fetch_add(&mean[cltIdx * dims + (baseRow + j)], sum[j]);
+                }
             }
         });
     });
