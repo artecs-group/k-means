@@ -25,7 +25,7 @@ int main(int argc, const char* argv[]) {
         float val;
         for(int j{0}; j < dims; j++) {
             line_stream >> val;
-            h_attrs[i + n_points*j] = val;
+            h_attrs[j*n_points + i] = val;
         }
     }
 

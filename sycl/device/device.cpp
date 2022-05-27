@@ -231,7 +231,7 @@ void Device::_assign_clusters() {
 
 
 void Device::_assign_clusters_nvidia() {
-    constexpr int block_size = 128;
+    constexpr int block_size = ASSIGN_BLOCK_SIZE_NVIDIA;
     const int blocks         = attribute_size / block_size + (attribute_size % block_size == 0 ? 0 : 1);
     _queue.submit([&](handler& h) {
         int attribute_size       = this->attribute_size;
@@ -288,7 +288,7 @@ void Device::_nvidia_reduction() {
         unsigned int* assigments    = this->assigments;
         unsigned int* counts        = this->counts;
         size_t size_mean            = RED_DIMS_PACK_NVIDIA * RED_ATTRS_PACK_NVIDIA * sizeof(float);
-        size_t size_label           = RED_ATTRS_PACK_NVIDIA * sizeof(float);
+        size_t size_label           = RED_ATTRS_PACK_NVIDIA * sizeof(unsigned int);
 
         sycl::accessor<float, 1, sycl::access::mode::read_write, sycl::access::target::local> mean_package(size_mean, h);
         sycl::accessor<unsigned int, 1, sycl::access::mode::read_write, sycl::access::target::local> label_package(size_label, h);

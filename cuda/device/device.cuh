@@ -5,8 +5,9 @@
 #include <tuple>
 #include <string>
 
-#define THREADS_EU 1
-#define EUs_SUBSLICE_NVIDIA_PASCAL 128
+#define RED_ATTRS_PACK_NVIDIA 128
+#define RED_DIMS_PACK_NVIDIA 4
+#define ASSIGN_BLOCK_SIZE_NVIDIA 128
 
 class Device {
     public:
@@ -17,11 +18,10 @@ class Device {
 
     private:
         cudaDeviceProp _gpu_props;
-        float *attributes{nullptr}, *mean{nullptr}, *sum{nullptr};
-        unsigned int* counts{nullptr};
-        int* assigments{nullptr};
-        int dims{0}, k{0}, attributes_size{0}, attributes_bytes{0}, mean_bytes{0}, sum_size{0}, sum_bytes{0}, 
-            count_bytes{0}, attributes_size_pad{0}, threads{0}, work_items{0}, blocks{0};
+        float *attributes{nullptr}, *mean{nullptr};
+        unsigned int *counts{nullptr}, *assigments{nullptr};
+        int dims{0}, k{0}, attributes_size{0}, attributes_bytes{0}, mean_bytes{0}, 
+            count_bytes{0}, threads{0}, work_items{0}, blocks{0};
 
         void _select_device();
         void _sync();

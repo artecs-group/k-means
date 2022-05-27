@@ -11,6 +11,7 @@
 #define RED_ATTRS_PACK 16
 #define RED_DIMS_PACK_IGPU 4
 
+#define ASSIGN_BLOCK_SIZE_NVIDIA 128
 #define ASSIGN_PACK 3
 #define ASSIGN_GROUP_SIZE_CPU 1
 #define ASSIGN_GROUP_SIZE_GPU 256
@@ -54,10 +55,10 @@ class Device {
     private:
         sycl::queue _queue;
 
-        float *attributes{nullptr}, *mean{nullptr}, *mean_package{nullptr};
-        unsigned int *counts{nullptr}, *count_package{nullptr}, *assigments{nullptr};
+        float *attributes{nullptr}, *mean{nullptr};
+        unsigned int *counts{nullptr}, *assigments{nullptr};
         int dims{0}, k{0}, attribute_size{0}, attribute_bytes{0}, mean_bytes{0}, 
-            count_bytes{0}, attribute_size_pad{0}, group_size{0}, work_items{0}, groups{0};
+            count_bytes{0}, group_size{0}, work_items{0}, groups{0};
 
         sycl::queue _get_queue();
         void _sync();

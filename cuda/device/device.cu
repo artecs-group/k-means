@@ -3,118 +3,115 @@
 #include <algorithm>
 #include <cfloat>
 #include <chrono>
+#include <unordered_set>
 #include "./device.cuh"
 
-__device__ float squared_l2_distance(float x_1, float x_2) {
+__device__ inline float squared_l2_distance(float x_1, float x_2) {
     float a = x_1 - x_2;
     return a*a;
 }
 
 
 __global__ void assign_clusters(int attrs_size, int k, int dims,
-    float* __restrict__ attrs, float* __restrict__ mean, float* __restrict__ sum,
-    unsigned int* __restrict__ counts, int* __restrict__ assigments)
+    float* __restrict__ attrs, float* __restrict__ mean, unsigned int* __restrict__ assigments)
 { 
-    const int global_index = blockIdx.x * blockDim.x + threadIdx.x;
-
+    const int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
     float best_distance{FLT_MAX};
-    int best_cluster{-1};
+    int best_cluster{0};
     float distance{0};
-    for (int cluster = 0; cluster < k; ++cluster) {
+
+    if(global_idx >= attrs_size)
+        return;
+
+    for (int cluster = 0; cluster < k; cluster++) {
         for(int d{0}; d < dims; d++)
-            distance += squared_l2_distance(attrs[(d * attrs_size) + global_index], mean[(cluster * dims) + d]);
-        
-        if (distance < best_distance) {
-            best_distance = distance;
-            best_cluster = cluster;
-        }
-        distance = 0;
-    }
-    assigments[global_index] = best_cluster;
+            distance += squared_l2_distance(attrs[d * attrs_size + global_idx], mean[cluster * dims + d]);
 
-    int val_id{0}, sum_id{0};
-    for(int cluster{0}; cluster < k; cluster++) {
-        for(int d{0}; d < dims; d++) {
-            val_id       = (d * attrs_size) + global_index;
-            sum_id       = attrs_size * cluster * dims + val_id;
-            sum[sum_id]  = (best_cluster == cluster) ? attrs[val_id] : 0;
-        }
-        counts[attrs_size * cluster + global_index] = (best_cluster == cluster) ? 1 : 0;
+        bool min = distance < best_distance;
+        best_distance = min ? distance : best_distance;
+        best_cluster  = distance < best_distance ? cluster : best_cluster;
+        distance      = 0;
     }
+    assigments[global_idx] = best_cluster;
 }
 
 
-__global__ void tree_reduction(int CUs, int attrs_per_CU, int attrs_size, int remaining_attrs,
-    int k, int dims, float* __restrict__ sums, unsigned int* __restrict__ counts)
+__global__ void tree_reduction(size_t sh_offset, int remainder_attr, int quotient_attr, int remainder_dims,
+    int quotient_dims, int attrs_size, int k, int dims, float* __restrict__ attrs, 
+    float* __restrict__ mean, unsigned int* __restrict__ assigments, unsigned int* __restrict__ counts)
 {
-    extern __shared__ float shared_sum[];
-    unsigned int* shared_count = (unsigned int*) &shared_sum[CUs];
+    extern __shared__ float mean_package[];
+    unsigned int* label_package = (unsigned int*) &mean_package[sh_offset];
 
-    const int cluster        = blockIdx.y * blockDim.y + threadIdx.y;
-    const int d              = blockIdx.z * blockDim.z + threadIdx.z;
-    const int local_idx      = threadIdx.x;
-    const int attr_start_idx = attrs_per_CU * local_idx;
-    const int n_attrs        = (local_idx == CUs-1) ? attrs_per_CU + remaining_attrs : attrs_per_CU;
-    int sum{0}, counter{0};
+    int gid_x   = blockIdx.y;
+    int baseRow = blockIdx.x * RED_DIMS_PACK_NVIDIA; // Base row of the block
+    int row     = baseRow + threadIdx.x; // Row of child thread
+    int baseCol = gid_x * RED_ATTRS_PACK_NVIDIA; // Base column of the block
+    int col     = baseCol + threadIdx.y; // Column of child thread
+    int cltIdx  = threadIdx.x * RED_ATTRS_PACK_NVIDIA + threadIdx.y; // 1D cluster index
 
-    // load all elements by thread
-    for(int i{attr_start_idx}; i < attr_start_idx + n_attrs; i++) {
-        sum     += sums[(attrs_size * cluster * dims) + d * attrs_size + i];
-        counter += counts[attrs_size * cluster + i];
+    // Add one element per group from the remaining elements
+    int offset = (gid_x < remainder_attr ? ((quotient_attr + 1) * gid_x) : (quotient_attr * gid_x + remainder_attr));
+    int length = (gid_x < remainder_attr ? (quotient_attr + 1) : quotient_attr);
+
+    // Load the values and cluster labels of instances into shared memory
+    if (col < (offset + length) && row < dims) {
+        mean_package[threadIdx.x * RED_DIMS_PACK_NVIDIA + threadIdx.y] = attrs[row * attrs_size + col];
+        if (threadIdx.x == 0)
+            label_package[threadIdx.y] = assigments[col];
     }
-    shared_sum[local_idx]   = sum;
-    shared_count[local_idx] = counter;
+    __syncthreads();
 
-    // tree reduction
-    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        __syncthreads();
-        if (local_idx < stride) {
-            shared_sum[local_idx]   += shared_sum[local_idx + stride];
-            shared_count[local_idx] += shared_count[local_idx + stride];
+    // Compute partial evolution of centroid related to cluster number 'cltIdx'
+    if (cltIdx < k) {  // Required condition: k <= RED_ATTRS_PACK_NVIDIA * RED_DIMS_PACK_NVIDIA <= 1024
+        float sum[RED_DIMS_PACK_NVIDIA] = {0};
+        unsigned int count = 0;
+
+        // Accumulate contributions to cluster number 'cltIdx'
+        // the second for condition is set for the last block to avoid out of bounds
+        for (int x{0}; x < RED_ATTRS_PACK_NVIDIA && (baseCol + x) < (offset + length); x++) {
+            if (label_package[x] == cltIdx) {
+                count++;
+                for (int y{0}; y < RED_DIMS_PACK_NVIDIA && (baseRow + y) < dims; y++)
+                    sum[y] += mean_package[y * RED_ATTRS_PACK_NVIDIA + x];
+            }
         }
-    }
 
-    if (local_idx == 0) {
-        sums[(attrs_size * cluster * dims) + d * attrs_size] = shared_sum[0];
-        counts[attrs_size * cluster]                         = shared_count[0];
+        // Add block contribution to global mem
+        if (count != 0) {
+            if (blockIdx.x == 0)
+                atomicAdd(&counts[cltIdx], count);
+            int dmax = (blockIdx.x == quotient_dims ? remainder_dims : RED_DIMS_PACK_NVIDIA);
+            for (int j{0}; j < dmax; j++)  //number of dimensions managed by block
+                atomicAdd(&mean[cltIdx * dims + (baseRow + j)], sum[j]);
+        }
     }
 }
 
 
-__global__ void compute_mean(int attrs_size, int dims, float* __restrict__ mean, 
-    float* __restrict__ sum, unsigned int* __restrict__ counts)
+__global__ void compute_mean(int dims, float* __restrict__ mean, 
+    unsigned int* __restrict__ counts)
 {
     const int global_index = blockIdx.x * blockDim.x + threadIdx.x;
-    const int count        = (1 < counts[attrs_size * global_index]) ? counts[attrs_size * global_index] : 1;
-    for(int d{0}; d < dims; d++) {
-        int id = (global_index * attrs_size * dims) + (d * attrs_size);
-        mean[global_index * dims + d] = sum[id] / count;
-    }
+    const int count        = (1 < counts[global_index]) ? counts[global_index] : 1;
+    for(int d{0}; d < dims; d++)
+        mean[global_index * dims + d] /= count;
 }
 
 
-Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_k), dims(_dims){
+Device::Device(int _k, int _dims, int length, std::vector<float>& h_attrs): k(_k), dims(_dims){
     _select_device();
     
-    attributes_size     = n_attrs;
-    std::tie (blocks, threads, work_items) = _get_block_threads(attributes_size);
-
-    attributes_size_pad = attributes_size + (work_items - attributes_size);
+    attributes_size     = length;
     attributes_bytes    = attributes_size * dims * sizeof(float);
     mean_bytes          = k * dims * sizeof(float);
-    sum_size            = k * dims * attributes_size;
-    sum_bytes           = sum_size * sizeof(float);
-    count_bytes         = k * attributes_size * sizeof(unsigned int);
+    count_bytes         = k * sizeof(unsigned int);
 
-    cudaMalloc(&attributes, attributes_size_pad * dims * sizeof(float));
+    cudaMalloc(&attributes, attributes_bytes);
     cudaMalloc(&mean, mean_bytes);
-    cudaMalloc(&sum, sum_bytes);
     cudaMalloc(&counts, count_bytes);
-    cudaMalloc(&assigments, attributes_size_pad * sizeof(int));
+    cudaMalloc(&assigments, attributes_size * sizeof(unsigned int));
 
-    // init pad values
-    cudaMemset(attributes, 0, attributes_size_pad * dims * sizeof(float));
-    _sync();
     cudaMemcpy(attributes, h_attrs.data(), attributes_bytes, cudaMemcpyHostToDevice);
 
     //shuffle attributess to random choose attributess
@@ -122,16 +119,18 @@ Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_
     rng.seed(0);
     std::uniform_int_distribution<size_t> indices(0, attributes_size - 1);
     std::vector<float> h_mean;
+    std::unordered_set<unsigned int> idxs;
+    unsigned int idx{0};
     for(int i{0}; i < k; i++) {
-        int idx = indices(rng);
-        for(int j{0}; j < dims; j++)
-            h_mean.push_back(h_attrs[idx + j * attributes_size]);
+        do { idx = indices(rng); } while(idxs.find(idx) != idxs.end());
+        idxs.insert(idx);
+        for(int d{0}; d < dims; d++)
+            h_mean.push_back(h_attrs[d * attributes_size + idx]);
     }
 
     cudaMemcpy(mean, h_mean.data(), mean_bytes, cudaMemcpyHostToDevice);
-    cudaMemset(sum, 0, sum_bytes);
     cudaMemset(counts, 0, count_bytes);
-    cudaMemset(assigments, 0, attributes_size_pad * sizeof(int)); // potential bug: try init to -1
+    cudaMemset(assigments, 0, attributes_size * sizeof(unsigned int));
     _sync();
 }
 
@@ -139,7 +138,6 @@ Device::Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs): k(_
 Device::~Device() {
 	if(attributes != nullptr) cudaFree(attributes);
 	if(mean != nullptr)       cudaFree(mean);
-	if(sum != nullptr)        cudaFree(sum);
 	if(counts != nullptr)     cudaFree(counts);
     if(assigments != nullptr) cudaFree(assigments);
 }
@@ -212,7 +210,8 @@ void Device::_sync() {
 
 
 void Device::_assign_clusters() {
-    std::tie (blocks, threads, work_items) = _get_block_threads(attributes_size);
+    constexpr int threads = ASSIGN_BLOCK_SIZE_NVIDIA;
+    const int blocks      = attributes_size / threads + (attributes_size % threads == 0 ? 0 : 1);
 
     assign_clusters<<<blocks, threads>>>(
         attributes_size,
@@ -220,27 +219,44 @@ void Device::_assign_clusters() {
         dims,
         attributes,
         mean,
-        sum,
-        counts,
         assigments
     );
 }
 
 
 void Device::_reduction() {
-	const size_t CUs       = THREADS_EU * EUs_SUBSLICE_NVIDIA_PASCAL;
-    const int attrs_per_CU = attributes_size / CUs;
-    const int remaining    = attributes_size % CUs;
-    int shared_size        = CUs * sizeof(float) + CUs * sizeof(unsigned int);
-    dim3 blocks(1, k, dims), threads(CUs);
-    tree_reduction<<<blocks, threads, shared_size>>>(
-        CUs,
-        attrs_per_CU,
+    const int remainder_attr = attributes_size % RED_ATTRS_PACK_NVIDIA;
+    const int quotient_attr  = attributes_size / RED_ATTRS_PACK_NVIDIA;
+    const int attr_pckg      = quotient_attr + (remainder_attr == 0 ? 0 : 1);
+    const int remainder_dims = dims % RED_DIMS_PACK_NVIDIA;
+    const int quotient_dims  = dims / RED_DIMS_PACK_NVIDIA;
+    const int dims_pckg      = quotient_dims + (remainder_dims == 0 ? 0 : 1);
+
+    dim3 threads, blocks;
+    threads.x = RED_DIMS_PACK_NVIDIA;
+    threads.y = RED_ATTRS_PACK_NVIDIA;
+    blocks.x  = dims_pckg;
+    blocks.y  = attr_pckg;
+
+    size_t size_mean  = RED_DIMS_PACK_NVIDIA * RED_ATTRS_PACK_NVIDIA * sizeof(float);
+    size_t size_label = RED_ATTRS_PACK_NVIDIA * sizeof(unsigned int);
+
+    cudaMemset(mean, 0, mean_bytes);
+    cudaMemset(counts, 0, count_bytes);
+    _sync();
+	
+    tree_reduction<<<blocks, threads, size_mean + size_label>>>(
+        RED_DIMS_PACK_NVIDIA * RED_ATTRS_PACK_NVIDIA,
+        remainder_attr,
+        quotient_attr,
+        remainder_dims,
+        quotient_dims,
         attributes_size,
-        remaining,
         k,
         dims,
-        sum,
+        attributes,
+        mean,
+        assigments,
         counts
     );
 }
@@ -249,10 +265,8 @@ void Device::_reduction() {
 void Device::_compute_mean() {
     std::tie (blocks, threads, work_items) = _get_block_threads(k);
     compute_mean<<<blocks, threads>>>(
-        attributes_size,
         dims,
         mean,
-        sum,
         counts
     );
 }
