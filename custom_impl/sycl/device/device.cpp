@@ -156,7 +156,7 @@ void Device::_assign_clusters() {
 #if defined(CPU_DEVICE)
     constexpr int group_size = ASSIGN_GROUP_SIZE_CPU;
 #else //GPU
-    constexpr int group_size = ASSIGN_GROUP_SIZE_GPU;
+    constexpr int group_size = ASSIGN_GROUP_SIZE_IGPU;
 #endif
     constexpr int B          = 2;
     const int simd_width     = 4; //check that simd_width < dims
