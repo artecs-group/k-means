@@ -53,7 +53,7 @@ std::ostream &operator<<(std::ostream &stream, const oneapi::dal::table &table) 
 
 int main(int argc, const char* argv[]) {
     if (argc < 3) {
-        std::cerr << "usage: k_means <data-file> <k> <number-points> [iterations]" << std::endl;
+        std::cerr << "usage: k_means <data-file> <k> [iterations]" << std::endl;
         std::exit(EXIT_FAILURE);
     }
 
