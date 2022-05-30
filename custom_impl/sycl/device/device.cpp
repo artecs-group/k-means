@@ -156,7 +156,7 @@ void Device::_assign_clusters() {
 #if defined(CPU_DEVICE)
     constexpr int group_size = ASSIGN_GROUP_SIZE_CPU;
 #else //GPU
-    constexpr int group_size = ASSIGN_GROUP_SIZE_IGPU;
+    constexpr int group_size = ASSIGN_GROUP_SIZE_GPU;
 #endif
     constexpr int B          = 2;
     const int simd_width     = 4; //check that simd_width < dims
@@ -347,7 +347,7 @@ void Device::_intel_gpu_reduction() {
     const int remainder_pckg = attribute_size % RED_ATTRS_PACK;
     const int dims_remainder = dims % RED_DIMS_PACK_IGPU;
     const int dims_pckg      = dims / RED_DIMS_PACK_IGPU + (dims_remainder == 0 ? 0 : 1);
-    const int att_group_size = RED_DIMS_PACK_IGPU / RED_GROUP_SIZE_IGPU;  
+    const int att_group_size = RED_GROUP_SIZE_IGPU;
 
     sycl::range<2> group_size(att_group_size, 1);
     sycl::range<2> groups(RED_ATTRS_PACK, dims_pckg);
