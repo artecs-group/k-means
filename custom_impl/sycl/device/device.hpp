@@ -11,11 +11,13 @@
 #define RED_ATTRS_PACK 16
 #define RED_DIMS_PACK_IGPU 4
 #define RED_GROUP_SIZE_IGPU 256
+#define RED_SIMD_WIDTH 4
 
 #define ASSIGN_BLOCK_SIZE_NVIDIA 128
 #define ASSIGN_PACK 3
 #define ASSIGN_GROUP_SIZE_CPU 1
 #define ASSIGN_GROUP_SIZE_IGPU 256
+#define ASSIGN_SIMD_WIDTH 4
 
 using namespace cl::sycl;
 

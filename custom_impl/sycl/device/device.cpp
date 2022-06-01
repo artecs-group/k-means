@@ -159,7 +159,7 @@ void Device::_assign_clusters() {
     constexpr int group_size = ASSIGN_GROUP_SIZE_IGPU;
 #endif
     constexpr int B          = 2;
-    const int simd_width     = 4; //check that simd_width < dims
+    const int simd_width     = ASSIGN_SIMD_WIDTH; //check that simd_width < dims
     const int simd_remainder = dims % simd_width;
     const int attrs_per_pckg = attribute_size / ASSIGN_PACK;
     const int remainder_pckg = attribute_size % ASSIGN_PACK;
@@ -352,7 +352,7 @@ void Device::_intel_gpu_reduction() {
     sycl::range<2> group_size(att_group_size, 1);
     sycl::range<2> groups(RED_ATTRS_PACK, dims_pckg);
     
-    const int simd_width     = 4; //check that simd_width <= RED_DIMS_PACK_IGPU
+    const int simd_width     = RED_SIMD_WIDTH; //check that simd_width <= RED_DIMS_PACK_IGPU
     const int simd_remainder = dims % simd_width;
 
     // clean matrices
@@ -448,7 +448,7 @@ void Device::_intel_gpu_reduction() {
 
 
 void Device::_cpu_reduction() {
-    const int simd_width    = 8; //check that simd_width < dims
+    const int simd_width    = RED_SIMD_WIDTH; //check that simd_width < dims
     const int simd_remainder = dims % simd_width;
     const int attrs_per_CU  = attribute_size / RED_ATTRS_PACK;
     const int remaining     = attribute_size % RED_ATTRS_PACK;
