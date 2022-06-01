@@ -384,7 +384,7 @@ void Device::_intel_gpu_reduction() {
             offset           = offset + attrs_per_wi * local_idx;
             length           = (local_idx == att_group_size-1) ? attrs_per_wi + remainder_wi : attrs_per_wi;
             int dim_offset   = RED_DIMS_PACK_IGPU * item.get_group(1);
-            int dim_length   = dim_offset + RED_DIMS_PACK_IGPU;
+            int dim_length   = dim_offset + (item.get_group(1) != dims_pckg-1 ? RED_DIMS_PACK_IGPU : dims_remainder);
             sycl::vec<float, simd_width> v_pckg, result;
 
             // init shared memory
