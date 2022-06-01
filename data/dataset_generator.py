@@ -9,4 +9,4 @@ if __name__ == '__main__':
     n_rows: int = int(sys.argv[1])
     n_columns: int = int(sys.argv[2])
     dataset = np.random.rand(n_rows, n_columns) 
-    np.savetxt(f'data/synthetic_{n_rows}_{n_columns}.txt', dataset, delimiter=' ')
+    np.savetxt(f'data/synthetic_{n_rows}_{n_columns}.txt', dataset, delimiter=' ', fmt='%4.4f')
