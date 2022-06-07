@@ -36,7 +36,7 @@ __global__ void assign_clusters(int attrs_size, int k, int dims,
 }
 
 
-__global__ void tree_reduction(size_t sh_offset, int remainder_attr, int quotient_attr, int remainder_dims,
+__global__ void reduction(size_t sh_offset, int remainder_attr, int quotient_attr, int remainder_dims,
     int quotient_dims, int attrs_size, int k, int dims, float* __restrict__ attrs, 
     float* __restrict__ mean, unsigned int* __restrict__ assigments, unsigned int* __restrict__ counts)
 {
@@ -245,7 +245,7 @@ void Device::_reduction() {
     cudaMemset(counts, 0, count_bytes);
     _sync();
 	
-    tree_reduction<<<blocks, threads, size_mean + size_label>>>(
+    reduction<<<blocks, threads, size_mean + size_label>>>(
         RED_DIMS_PACK_NVIDIA * RED_ATTRS_PACK_NVIDIA,
         remainder_attr,
         quotient_attr,

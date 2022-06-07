@@ -1,10 +1,12 @@
+#include <CL/sycl.hpp>
+#include <dpct/dpct.hpp>
 #include <chrono>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
-#include "device/device.hpp"
+#include "device/device.dp.hpp"
 
 int main(int argc, const char* argv[]) {
     if (argc < 5) {
@@ -25,11 +27,7 @@ int main(int argc, const char* argv[]) {
         float val;
         for(int j{0}; j < dims; j++) {
             line_stream >> val;
-#if defined(NVIDIA_DEVICE)
             h_attrs[j*n_points + i] = val;
-#else
-            h_attrs[i*dims + j] = val;
-#endif
         }
     }
 
@@ -44,7 +42,7 @@ int main(int argc, const char* argv[]) {
               << "Dimensions = " << dims << std::endl
               << "Atributes  = " << n_points << std::endl
               << "Iterations = " << number_of_iterations << std::endl;
-
+              
     std::vector<float> mean(clusters*dims, 0);
     device.save_solution(mean);
 

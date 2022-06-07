@@ -1,0 +1,195 @@
+---
+MainSourceFile:  '/home/youss/Documentos/k-means/custom_impl/dpct/device/device.dp.hpp'
+Replacements:
+  - FilePath:        '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cuh'
+    Offset:          51
+    Length:          0
+    ReplacementText: "#include <CL/sycl.hpp>\n#include <dpct/dpct.hpp>\n"
+    ConstantFlag:    ''
+    ConstantOffset:  0
+    InitStr:         ''
+    NewHostVarName:  ''
+    BlockLevelFormatFlag: false
+  - FilePath:        '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cuh'
+    Offset:          139
+    Length:          0
+    ReplacementText: "/*\nDPCT1083:4: The size of local memory in the migrated code may be different from the original code. Check that the allocated memory size in the migrated code is correct.\n*/\n"
+    ConstantFlag:    ''
+    ConstantOffset:  0
+    InitStr:         ''
+    NewHostVarName:  ''
+    BlockLevelFormatFlag: false
+  - FilePath:        '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cuh'
+    Offset:          451
+    Length:          14
+    ReplacementText: 'dpct::device_info'
+    ConstantFlag:    ''
+    ConstantOffset:  0
+    InitStr:         ''
+    NewHostVarName:  ''
+    BlockLevelFormatFlag: false
+DpctVersion:     2022.0.0
+MainHelperFileName: dpct
+USMLevel:        ''
+FeatureMap:
+  atomic.hpp:
+    atomic_fetch_add:
+      IsCalled:        true
+      CallerSrcFiles:
+        - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+      FeatureName:     atomic_fetch_add
+      SubFeatureMap:   {}
+  device.hpp:
+    dev_mgr:
+      IsCalled:        false
+      FeatureName:     ''
+      SubFeatureMap:
+        dev_mgr_get_device:
+          IsCalled:        true
+          CallerSrcFiles:
+            - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+          FeatureName:     'dev_mgr::get_device'
+          SubFeatureMap:   {}
+    device_ext:
+      IsCalled:        false
+      FeatureName:     ''
+      SubFeatureMap:
+        device_ext_default_queue:
+          IsCalled:        true
+          CallerSrcFiles:
+            - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+          FeatureName:     'device_ext::default_queue'
+          SubFeatureMap:   {}
+        device_ext_get_device_info_return_info:
+          IsCalled:        true
+          CallerSrcFiles:
+            - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+          FeatureName:     'device_ext::get_device_info'
+          SubFeatureMap:   {}
+        device_ext_queues_wait_and_throw:
+          IsCalled:        true
+          CallerSrcFiles:
+            - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+          FeatureName:     'device_ext::queues_wait_and_throw'
+          SubFeatureMap:   {}
+    device_info:
+      IsCalled:        true
+      CallerSrcFiles:
+        - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cuh'
+      FeatureName:     device_info
+      SubFeatureMap:
+        device_info_get_max_work_group_size:
+          IsCalled:        true
+          CallerSrcFiles:
+            - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+          FeatureName:     'device_info::get_max_work_group_size'
+          SubFeatureMap:   {}
+        device_info_get_name:
+          IsCalled:        true
+          CallerSrcFiles:
+            - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+          FeatureName:     'device_info::get_name'
+          SubFeatureMap:   {}
+    get_current_device:
+      IsCalled:        true
+      CallerSrcFiles:
+        - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+      FeatureName:     get_current_device
+      SubFeatureMap:   {}
+    get_default_queue:
+      IsCalled:        true
+      CallerSrcFiles:
+        - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+      FeatureName:     get_default_queue
+      SubFeatureMap:   {}
+  memory.hpp:
+    dpct_memcpy:
+      IsCalled:        true
+      CallerSrcFiles:
+        - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+      FeatureName:     dpct_memcpy
+      SubFeatureMap:   {}
+    dpct_memcpy_2d:
+      IsCalled:        true
+      CallerSrcFiles:
+        - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+      FeatureName:     dpct_memcpy
+      SubFeatureMap:   {}
+    dpct_memcpy_3d:
+      IsCalled:        true
+      CallerSrcFiles:
+        - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+      FeatureName:     dpct_memcpy
+      SubFeatureMap:   {}
+    dpct_memset:
+      IsCalled:        true
+      CallerSrcFiles:
+        - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+      FeatureName:     dpct_memset
+      SubFeatureMap:   {}
+    dpct_memset_2d:
+      IsCalled:        true
+      CallerSrcFiles:
+        - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+      FeatureName:     dpct_memset
+      SubFeatureMap:   {}
+    dpct_memset_3d:
+      IsCalled:        true
+      CallerSrcFiles:
+        - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+      FeatureName:     dpct_memset
+      SubFeatureMap:   {}
+    memcpy_direction:
+      IsCalled:        true
+      CallerSrcFiles:
+        - '/home/youss/Documentos/k-means/custom_impl/cuda/device/device.cu'
+      FeatureName:     memcpy_direction
+      SubFeatureMap:   {}
+CompileTargets:  {}
+OptionMap:
+  AsyncHandler:
+    Value:           'false'
+    Specified:       false
+  CommentsEnabled:
+    Value:           'false'
+    Specified:       false
+  CompilationsDir:
+    Value:           ''
+    Specified:       false
+  CtadEnabled:
+    Value:           'false'
+    Specified:       false
+  CustomHelperFileName:
+    Value:           dpct
+    Specified:       false
+  ExperimentalFlag:
+    Value:           '0'
+    Specified:       false
+  ExplicitClNamespace:
+    Value:           'false'
+    Specified:       false
+  ExplicitNamespace:
+    Value:           '20'
+    Specified:       false
+  ExtensionFlag:
+    Value:           '4294967295'
+    Specified:       false
+  NDRangeDim:
+    Value:           '3'
+    Specified:       false
+  NoDRYPattern:
+    Value:           'false'
+    Specified:       false
+  OptimizeMigration:
+    Value:           'false'
+    Specified:       false
+  ProcessAll:
+    Value:           'false'
+    Specified:       false
+  SyclNamedLambda:
+    Value:           'false'
+    Specified:       false
+  UsmLevel:
+    Value:           '1'
+    Specified:       false
+...
