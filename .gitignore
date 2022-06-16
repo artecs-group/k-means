@@ -6,3 +6,4 @@ k_means
 kmeans
 venv/
 *.exe
+*.nvvp

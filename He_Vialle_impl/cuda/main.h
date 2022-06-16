@@ -4,7 +4,7 @@
 // Benchmark dataset
 #define NbPoints    2458285      // Number of data instances
 #define NbDims      68             // Number of dimensions
-#define NbClusters  256             // Number of clusters
+#define NbClusters  4             // Number of clusters
 #define NbPackages  100           // Number of packages used for UpdateCentroids
 #define INPUT_DATA                "../../data/USCensus1990.data.txt"
 #define INPUT_INITIAL_CENTROIDS   ""   // Optional
@@ -14,7 +14,7 @@
 #define BSXN        128           // BLOCK_SIZE_X related to NbPoints (BSXN has to be in [1, 1024] & be a power of 2)
 // - For UpdateCentroids kernel
 #define BSXP        32            // BLOCK_SIZE_X related to NbPoints devided by NbPackages (BSXP has to be in [1, 1024] & be a power of 2)
-#define BSYD        8             // BLOCK_SIZE_Y related to NbDims (BSXP*BSYD has to be in [NbClusters, 1024])
+#define BSYD        4             // BLOCK_SIZE_Y related to NbDims (BSXP*BSYD has to be in [NbClusters, 1024])
 #define BSXK        32            // BLOCK_SIZE_X related to NbClusters (BSXK has to be in [1, 1024] & be a power of 2)
 
 // Nb of streams
