@@ -20,13 +20,11 @@ CLINK = -fsycl-device-code-split=per_kernel
 ifeq ($(PDEVICE),NVIDIA_DEVICE)
 	CC = clang++
 	DPCT_INCLUDE_DIR = ${ONEAPI_ROOT}/dpcpp-ct/latest/include/
-	CFLAGS += -w -fsycl-targets=nvptx64-nvidia-cuda -I$(DPCT_INCLUDE_DIR)
+	CFLAGS += -O3 -w -fsycl-targets=nvptx64-nvidia-cuda -I$(DPCT_INCLUDE_DIR)-w -fsycl-targets=nvptx64-nvidia-cuda -I$(DPCT_INCLUDE_DIR)
 endif
 
 ifeq ($(DEBUG),yes)
-	CFLAGS += -g -O0
-else
-	CFLAGS += -O3
+	CFLAGS += -g
 endif
 
 k_means: ./device/device.o main.o

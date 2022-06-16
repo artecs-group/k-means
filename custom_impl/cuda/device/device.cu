@@ -12,33 +12,34 @@ __device__ inline float squared_l2_distance(float x_1, float x_2) {
 }
 
 
-__global__ void assign_clusters(int attrs_size, int k, int dims,
-    float* __restrict__ attrs, float* __restrict__ mean, unsigned int* __restrict__ assigments)
+__global__ void assign_clusters(float* __restrict__ attrs, float* __restrict__ mean, 
+    unsigned int* __restrict__ assigments)
 { 
     const int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    float best_distance{FLT_MAX};
-    int best_cluster{0};
-    float distance{0};
 
-    if(global_idx >= attrs_size)
-        return;
+    if(global_idx < ATTRIBUTE_SIZE) {
+        float best_distance{FLT_MAX}, distance;
+        int best_cluster{0};
 
-    for (int cluster = 0; cluster < k; cluster++) {
-        for(int d{0}; d < dims; d++)
-            distance += squared_l2_distance(attrs[d * attrs_size + global_idx], mean[cluster * dims + d]);
+        for (int cluster = 0; cluster < K; cluster++) {
+            distance = 0.0f;
+            for(int d = 0; d < DIMS; d++)
+                distance += squared_l2_distance(attrs[d * ATTRIBUTE_SIZE + global_idx], mean[cluster * DIMS + d]);
 
-        bool min = distance < best_distance;
-        best_distance = min ? distance : best_distance;
-        best_cluster  = distance < best_distance ? cluster : best_cluster;
-        distance      = 0;
+            if(distance < best_distance) {
+                best_distance = distance;
+                best_cluster  = cluster;
+            }
+        }
+
+        assigments[global_idx] = best_cluster;
     }
-    assigments[global_idx] = best_cluster;
 }
 
 
-__global__ void tree_reduction(size_t sh_offset, int remainder_attr, int quotient_attr, int remainder_dims,
-    int quotient_dims, int attrs_size, int k, int dims, float* __restrict__ attrs, 
-    float* __restrict__ mean, unsigned int* __restrict__ assigments, unsigned int* __restrict__ counts)
+__global__ void reduction(size_t sh_offset, int remainder_attr, int quotient_attr, int remainder_dims,
+    int quotient_dims, float* __restrict__ attrs, float* __restrict__ mean, 
+    unsigned int* __restrict__ assigments, unsigned int* __restrict__ counts)
 {
     extern __shared__ float mean_package[];
     unsigned int* label_package = (unsigned int*) &mean_package[sh_offset];
@@ -55,15 +56,15 @@ __global__ void tree_reduction(size_t sh_offset, int remainder_attr, int quotien
     int length = (gid_x < remainder_attr ? (quotient_attr + 1) : quotient_attr);
 
     // Load the values and cluster labels of instances into shared memory
-    if (col < (offset + length) && row < dims) {
-        mean_package[threadIdx.x * RED_DIMS_PACK_NVIDIA + threadIdx.y] = attrs[row * attrs_size + col];
+    if (col < (offset + length) && row < DIMS) {
+        mean_package[threadIdx.x * RED_DIMS_PACK_NVIDIA + threadIdx.y] = attrs[row * ATTRIBUTE_SIZE + col];
         if (threadIdx.x == 0)
             label_package[threadIdx.y] = assigments[col];
     }
     __syncthreads();
 
     // Compute partial evolution of centroid related to cluster number 'cltIdx'
-    if (cltIdx < k) {  // Required condition: k <= RED_ATTRS_PACK_NVIDIA * RED_DIMS_PACK_NVIDIA <= 1024
+    if (cltIdx < K) {  // Required condition: K <= RED_ATTRS_PACK_NVIDIA * RED_DIMS_PACK_NVIDIA <= 1024
         float sum[RED_DIMS_PACK_NVIDIA] = {0};
         unsigned int count = 0;
 
@@ -72,7 +73,7 @@ __global__ void tree_reduction(size_t sh_offset, int remainder_attr, int quotien
         for (int x{0}; x < RED_ATTRS_PACK_NVIDIA && (baseCol + x) < (offset + length); x++) {
             if (label_package[x] == cltIdx) {
                 count++;
-                for (int y{0}; y < RED_DIMS_PACK_NVIDIA && (baseRow + y) < dims; y++)
+                for (int y{0}; y < RED_DIMS_PACK_NVIDIA && (baseRow + y) < DIMS; y++)
                     sum[y] += mean_package[y * RED_ATTRS_PACK_NVIDIA + x];
             }
         }
@@ -83,54 +84,56 @@ __global__ void tree_reduction(size_t sh_offset, int remainder_attr, int quotien
                 atomicAdd(&counts[cltIdx], count);
             int dmax = (blockIdx.x == quotient_dims ? remainder_dims : RED_DIMS_PACK_NVIDIA);
             for (int j{0}; j < dmax; j++)  //number of dimensions managed by block
-                atomicAdd(&mean[cltIdx * dims + (baseRow + j)], sum[j]);
+                atomicAdd(&mean[cltIdx * DIMS + (baseRow + j)], sum[j]);
         }
     }
 }
 
 
-__global__ void compute_mean(int dims, float* __restrict__ mean, 
-    unsigned int* __restrict__ counts)
+__global__ void compute_mean(float* __restrict__ mean, unsigned int* __restrict__ counts)
 {
     const int global_index = blockIdx.x * blockDim.x + threadIdx.x;
-    const int count        = (1 < counts[global_index]) ? counts[global_index] : 1;
-    for(int d{0}; d < dims; d++)
-        mean[global_index * dims + d] /= count;
+    int count = counts[global_index];
+    
+    if (count < 1)
+        count = 1;
+
+    for(int d{0}; d < DIMS; d++)
+        mean[global_index * DIMS + d] /= count;
 }
 
 
-Device::Device(int _k, int _dims, int length, std::vector<float>& h_attrs): k(_k), dims(_dims){
+Device::Device(std::vector<float>& h_attrs) {
     _select_device();
     
-    attributes_size     = length;
-    attributes_bytes    = attributes_size * dims * sizeof(float);
-    mean_bytes          = k * dims * sizeof(float);
-    count_bytes         = k * sizeof(unsigned int);
+    attributes_bytes    = ATTRIBUTE_SIZE * DIMS * sizeof(float);
+    mean_bytes          = K * DIMS * sizeof(float);
+    count_bytes         = K * sizeof(unsigned int);
 
     cudaMalloc(&attributes, attributes_bytes);
     cudaMalloc(&mean, mean_bytes);
     cudaMalloc(&counts, count_bytes);
-    cudaMalloc(&assigments, attributes_size * sizeof(unsigned int));
+    cudaMalloc(&assigments, ATTRIBUTE_SIZE * sizeof(unsigned int));
 
     cudaMemcpy(attributes, h_attrs.data(), attributes_bytes, cudaMemcpyHostToDevice);
 
     //shuffle attributess to random choose attributess
     std::mt19937 rng(std::random_device{}());
     rng.seed(0);
-    std::uniform_int_distribution<size_t> indices(0, attributes_size - 1);
+    std::uniform_int_distribution<size_t> indices(0, ATTRIBUTE_SIZE - 1);
     std::vector<float> h_mean;
     std::unordered_set<unsigned int> idxs;
     unsigned int idx{0};
-    for(int i{0}; i < k; i++) {
+    for(int i{0}; i < K; i++) {
         do { idx = indices(rng); } while(idxs.find(idx) != idxs.end());
         idxs.insert(idx);
-        for(int d{0}; d < dims; d++)
-            h_mean.push_back(h_attrs[d * attributes_size + idx]);
+        for(int d{0}; d < DIMS; d++)
+            h_mean.push_back(h_attrs[d * ATTRIBUTE_SIZE + idx]);
     }
 
     cudaMemcpy(mean, h_mean.data(), mean_bytes, cudaMemcpyHostToDevice);
     cudaMemset(counts, 0, count_bytes);
-    cudaMemset(assigments, 0, attributes_size * sizeof(unsigned int));
+    cudaMemset(assigments, 0, ATTRIBUTE_SIZE * sizeof(unsigned int));
     _sync();
 }
 
@@ -150,11 +153,11 @@ void Device::_select_device() {
 }
 
 
-void Device::run_k_means(int iterations) {
+void Device::run_k_means() {
     std::chrono::time_point<std::chrono::high_resolution_clock> start, end;
     float t_assign{0}, t_reduction{0}, t_mean{0};
 
-    for (size_t i{0}; i < iterations; ++i) {
+    for (size_t i{0}; i < ITERATIONS; ++i) {
         start = std::chrono::high_resolution_clock::now();
         _assign_clusters();
         _sync();
@@ -211,25 +214,18 @@ void Device::_sync() {
 
 void Device::_assign_clusters() {
     constexpr int threads = ASSIGN_BLOCK_SIZE_NVIDIA;
-    const int blocks      = attributes_size / threads + (attributes_size % threads == 0 ? 0 : 1);
+    const int blocks      = ATTRIBUTE_SIZE / threads + (ATTRIBUTE_SIZE % threads == 0 ? 0 : 1);
 
-    assign_clusters<<<blocks, threads>>>(
-        attributes_size,
-        k,
-        dims,
-        attributes,
-        mean,
-        assigments
-    );
+    assign_clusters<<<blocks, threads>>>(attributes, mean, assigments);
 }
 
 
 void Device::_reduction() {
-    const int remainder_attr = attributes_size % RED_ATTRS_PACK_NVIDIA;
-    const int quotient_attr  = attributes_size / RED_ATTRS_PACK_NVIDIA;
+    const int remainder_attr = ATTRIBUTE_SIZE % RED_ATTRS_PACK_NVIDIA;
+    const int quotient_attr  = ATTRIBUTE_SIZE / RED_ATTRS_PACK_NVIDIA;
     const int attr_pckg      = quotient_attr + (remainder_attr == 0 ? 0 : 1);
-    const int remainder_dims = dims % RED_DIMS_PACK_NVIDIA;
-    const int quotient_dims  = dims / RED_DIMS_PACK_NVIDIA;
+    const int remainder_dims = DIMS % RED_DIMS_PACK_NVIDIA;
+    const int quotient_dims  = DIMS / RED_DIMS_PACK_NVIDIA;
     const int dims_pckg      = quotient_dims + (remainder_dims == 0 ? 0 : 1);
 
     dim3 threads, blocks;
@@ -245,15 +241,12 @@ void Device::_reduction() {
     cudaMemset(counts, 0, count_bytes);
     _sync();
 	
-    tree_reduction<<<blocks, threads, size_mean + size_label>>>(
+    reduction<<<blocks, threads, size_mean + size_label>>>(
         RED_DIMS_PACK_NVIDIA * RED_ATTRS_PACK_NVIDIA,
         remainder_attr,
         quotient_attr,
         remainder_dims,
         quotient_dims,
-        attributes_size,
-        k,
-        dims,
         attributes,
         mean,
         assigments,
@@ -263,12 +256,8 @@ void Device::_reduction() {
 
 
 void Device::_compute_mean() {
-    std::tie (blocks, threads, work_items) = _get_block_threads(k);
-    compute_mean<<<blocks, threads>>>(
-        dims,
-        mean,
-        counts
-    );
+    std::tie (blocks, threads, work_items) = _get_block_threads(K);
+    compute_mean<<<blocks, threads>>>(mean, counts);
 }
 
 

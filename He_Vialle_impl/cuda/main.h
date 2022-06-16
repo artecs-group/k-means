@@ -4,7 +4,7 @@
 // Benchmark dataset
 #define NbPoints    2458285      // Number of data instances
 #define NbDims      68             // Number of dimensions
-#define NbClusters  16             // Number of clusters
+#define NbClusters  4             // Number of clusters
 #define NbPackages  100           // Number of packages used for UpdateCentroids
 #define INPUT_DATA                "../../data/USCensus1990.data.txt"
 #define INPUT_INITIAL_CENTROIDS   ""   // Optional

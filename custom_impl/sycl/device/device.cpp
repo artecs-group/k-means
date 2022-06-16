@@ -254,7 +254,8 @@ void Device::_assign_clusters_nvidia() {
                 for(int d{0}; d < dims; d++)
                     distance += squared_l2_distance(attrs[d * attribute_size + global_idx], mean[cluster * dims + d]);
 
-                best_distance = sycl::min<float>(distance, best_distance);
+                bool min = distance < best_distance;
+                best_distance = min ? distance : best_distance;
                 best_cluster  = distance < best_distance ? cluster : best_cluster;
                 distance      = 0;
             }
@@ -275,8 +276,8 @@ void Device::_nvidia_reduction() {
     sycl::range<2> groups(dims_pckg, attr_pckg);
 
     // clean matrices
-    _queue.memset(counts, 0, count_bytes);
     _queue.memset(mean, 0, mean_bytes);
+    _queue.memset(counts, 0, count_bytes);
     _sync();
 
     _queue.submit([&](handler& h) {
