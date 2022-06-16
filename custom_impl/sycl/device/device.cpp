@@ -268,12 +268,8 @@ void Device::_nvidia_reduction() {
     const int remainder_dims = DIMS % RED_DIMS_PACK_NVIDIA;
     const int quotient_dims  = DIMS / RED_DIMS_PACK_NVIDIA;
     const int dims_pckg      = quotient_dims + (remainder_dims == 0 ? 0 : 1);
-    sycl::range<2> group_size(1, 1);
-    sycl::range<2> groups(1, 1);
-    group_size[0] = RED_DIMS_PACK_NVIDIA;
-    group_size[1] = RED_ATTRS_PACK_NVIDIA;
-    groups[0]     = dims_pckg;
-    groups[1]     = attr_pckg;
+    sycl::range<2> group_size(RED_DIMS_PACK_NVIDIA, RED_ATTRS_PACK_NVIDIA);
+    sycl::range<2> groups(dims_pckg, attr_pckg);
 
     // clean matrices
     _queue.memset(mean, 0, mean_bytes);

@@ -37,7 +37,7 @@ main.o: ./device/device.o
 	$(CC) $(CFLAGS) ./device/device.cpp -c -o ./device/device.o
 
 run: k_means
-	./k_means ../../data/household_power_consumption.txt 4 7 2049280 20
+	./k_means ../../data/household_power_consumption.txt
 
 .PHONY: clean
 clean:
