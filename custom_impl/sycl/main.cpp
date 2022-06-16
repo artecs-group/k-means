@@ -7,53 +7,44 @@
 #include "device/device.hpp"
 
 int main(int argc, const char* argv[]) {
-    if (argc < 5) {
-        std::cerr << "usage: k_means <data-file> <clusters> <dimensions> <number-points> [iterations]" << std::endl;
+    if (argc < 2) {
+        std::cerr << "usage: k_means <data-file>" << std::endl;
         std::exit(EXIT_FAILURE);
     }
 
-    const auto clusters             = std::atoi(argv[2]);
-    const auto dims                 = std::atoi(argv[3]);
-    const auto n_points             = std::atoi(argv[4]);
-    const auto number_of_iterations = (argc == 6) ? std::atoi(argv[5]) : 300;
-
-    std::vector<float> h_attrs(n_points*dims);
+    std::vector<float> h_attrs(ATTRIBUTE_SIZE*DIMS);
     std::ifstream stream(argv[1]);
     std::string line;
-    for(int i{0}; std::getline(stream, line) && i < n_points; i++) {
+    for(int i{0}; std::getline(stream, line) && i < ATTRIBUTE_SIZE; i++) {
         std::istringstream line_stream(line);
         float val;
-        for(int j{0}; j < dims; j++) {
+        for(int j{0}; j < DIMS; j++) {
             line_stream >> val;
-#if defined(NVIDIA_DEVICE)
-            h_attrs[j*n_points + i] = val;
-#else
-            h_attrs[i*dims + j] = val;
-#endif
+            h_attrs[j*ATTRIBUTE_SIZE + i] = val;
         }
     }
 
-    Device device = Device(clusters, dims, n_points, h_attrs);
+    Device device = Device(h_attrs);
 
     const auto start = std::chrono::high_resolution_clock::now();
-    device.run_k_means(number_of_iterations);
+    device.run_k_means();
     const auto end      = std::chrono::high_resolution_clock::now();
     const auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(end - start);
     std::cout << "Total time = " << duration.count() << "s" << std::endl;
-    std::cout << "Clusters   = " << clusters << std::endl
-              << "Dimensions = " << dims << std::endl
-              << "Atributes  = " << n_points << std::endl
-              << "Iterations = " << number_of_iterations << std::endl;
-
-    std::vector<float> mean(clusters*dims, 0);
+    std::cout << "Clusters   = " << K << std::endl
+              << "Dimensions = " << DIMS << std::endl
+              << "Atributes  = " << ATTRIBUTE_SIZE << std::endl
+              << "Iterations = " << ITERATIONS << std::endl;
+              
+    std::vector<float> mean(K*DIMS, 0);
     device.save_solution(mean);
 
-    std::cout << std::endl << "Clusters:" << std::endl;
-    for (size_t cluster{0}; cluster < clusters; ++cluster) {
-        for(size_t d{0}; d < dims; d++)
-            std::cout << mean[cluster * dims + d] << " ";
-        std::cout << std::endl;
-    }
+    // std::cout << std::endl << "Clusters:" << std::endl;
+    // for (size_t cluster{0}; cluster < K; ++cluster) {
+    //     for(size_t d{0}; d < DIMS; d++)
+    //         std::cout << mean[cluster * DIMS + d] << " ";
+    //     std::cout << std::endl;
+    // }
 
     return 0;
 }

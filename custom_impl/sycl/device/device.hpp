@@ -6,6 +6,11 @@
 #include <string>
 #include <CL/sycl.hpp>
 
+#define ATTRIBUTE_SIZE 2458285
+#define DIMS           68
+#define K              4
+#define ITERATIONS     20
+
 #define RED_ATTRS_PACK_NVIDIA 128
 #define RED_DIMS_PACK_NVIDIA 4
 #define RED_ATTRS_PACK 16
@@ -50,9 +55,9 @@ class IntelGpuSelector : public cl::sycl::device_selector {
 
 class Device {
     public:
-        Device(int _k, int _dims, int n_attrs, std::vector<float>& h_attrs);
+        Device(std::vector<float>& h_attrs);
         ~Device();
-        void run_k_means(int iterations);
+        void run_k_means();
         void save_solution(std::vector<float>& h_mean);
 
     private:
@@ -60,8 +65,7 @@ class Device {
 
         float *attributes{nullptr}, *mean{nullptr};
         unsigned int *counts{nullptr}, *assigments{nullptr};
-        int dims{0}, k{0}, attribute_size{0}, attribute_bytes{0}, mean_bytes{0}, 
-            count_bytes{0}, group_size{0}, work_items{0}, groups{0};
+        int attribute_bytes{0}, mean_bytes{0}, count_bytes{0}, group_size{0}, work_items{0}, groups{0};
 
         sycl::queue _get_queue();
         void _sync();
