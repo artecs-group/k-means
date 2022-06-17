@@ -1,0 +1,46 @@
+DEVICE = cpu # {cpu, nvidia, igpu}
+DEBUG = no # {yes, no}
+
+CPU = CPU_DEVICE
+IGPU = INTEL_GPU_DEVICE
+NVIDIA = NVIDIA_DEVICE
+
+PDEVICE = $(CPU)
+
+ifeq ($(DEVICE),nvidia)
+  PDEVICE = NVIDIA_DEVICE
+else ifeq ($(DEVICE), igpu)
+  PDEVICE = $(IGPU)
+endif
+
+CC = dpcpp
+CFLAGS = -D$(PDEVICE) -fsycl
+CLINK = -fsycl-device-code-split=per_kernel
+
+ifeq ($(PDEVICE),NVIDIA_DEVICE)
+	CC = clang++
+	DPCT_INCLUDE_DIR = ${ONEAPI_ROOT}/dpcpp-ct/latest/include/
+	CFLAGS += -O3 -w -fsycl-targets=nvptx64-nvidia-cuda -I$(DPCT_INCLUDE_DIR)-w -fsycl-targets=nvptx64-nvidia-cuda -I$(DPCT_INCLUDE_DIR)
+endif
+
+ifeq ($(DEBUG),yes)
+	CFLAGS += -g
+endif
+
+k_means: ./device/device.o main.o
+	$(CC) $(CFLAGS) $(CLINK) main.o ./device/device.o -o k_means
+
+main.o: ./device/device.o
+	$(CC) $(CFLAGS) main.cpp -c -o main.o
+
+./device/device.o: ./device/device.hpp
+	$(CC) $(CFLAGS) ./device/device.cpp -c -o ./device/device.o
+
+run: k_means
+	./k_means ../../data/USCensus1990.data.txt
+
+.PHONY: clean
+clean:
+	rm -f k_means \
+	*.o \
+	./device/*.o
