@@ -237,7 +237,7 @@ void Device::_assign_clusters_nvidia() {
         unsigned int* assigments = this->assigments;
 
         h.parallel_for<class assign_clusters_nvidia>(nd_range(range(blocks*block_size), range(block_size)), [=](nd_item<1> item){
-            int global_idx = item.get_global_id(0);
+            const int global_idx = item.get_global_id(0);
 
             if(global_idx < ATTRIBUTE_SIZE) {
                 float best_distance{FLT_MAX}, distance;

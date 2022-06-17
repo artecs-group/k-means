@@ -17,7 +17,7 @@ main.o: ./device/device.o
 	$(CC) $(CFLAGS) ./device/device.cu -c -o ./device/device.o
 
 run: k_means
-	./k_means ../../data/household_power_consumption.txt
+	./k_means ../../data/USCensus1990.data.txt
 
 .PHONY: clean
 clean:
