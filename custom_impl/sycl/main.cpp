@@ -20,7 +20,12 @@ int main(int argc, const char* argv[]) {
         float val;
         for(int j{0}; j < DIMS; j++) {
             line_stream >> val;
+#if defined(NVIDIA_DEVICE)
             h_attrs[j*ATTRIBUTE_SIZE + i] = val;
+#else
+            h_attrs[i*DIMS + j] = val;
+#endif     
+            
         }
     }
 
