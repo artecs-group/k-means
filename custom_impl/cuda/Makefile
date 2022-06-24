@@ -4,7 +4,7 @@ CC = nvcc
 CFLAGS = -std=c++17 -O3
 
 ifeq ($(DEBUG),yes)
-	CFLAGS += -g
+	CFLAGS += -g -lineinfo
 endif
 
 k_means: ./device/device.o main.o
