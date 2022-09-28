@@ -324,12 +324,15 @@ void Device::_nvidia_reduction() {
 
                 // Add block contribution to global mem
                 if (count != 0) {
-                    if (item.get_group(0) == 0)
-                        sycl::atomic_ref<unsigned int>(sycl::global_ptr<unsigned int>(&counts[cltIdx])).fetch_add(count);
+                    if (item.get_group(0) == 0) {
+                        sycl::atomic_ref<unsigned int, sycl::memory_order::relaxed, sycl::memory_scope::device, sycl::access::address_space::global_space> count_ref(counts[cltIdx]);
+                        count_ref.fetch_add(count);
+                    }
                     int dmax = (item.get_group(0) == quotient_dims ? remainder_dims : RED_DIMS_PACK_NVIDIA);
-                    for (int j{0}; j < dmax; j++)  //number of dimensions managed by block
-                        sycl::atomic_ref<unsigned int>(sycl::global_ptr<unsigned int>(&mean[cltIdx * DIMS + (baseRow + j)])).fetch_add(sum[j]);
-                        //dpct::atomic_fetch_add(&mean[cltIdx * DIMS + (baseRow + j)], sum[j]);
+                    for (int j{0}; j < dmax; j++) {  //number of dimensions managed by block
+                        sycl::atomic_ref<float, sycl::memory_order::relaxed, sycl::memory_scope::device, sycl::access::address_space::global_space> mean_ref(mean[cltIdx * DIMS + (baseRow + j)]);
+                        mean_ref.fetch_add(sum[j]);
+                    }
                 }
             }
         });
@@ -430,10 +433,12 @@ void Device::_intel_gpu_reduction() {
             // perform global sum
             if(local_idx == 0) {
                 for(int cluster{0}; cluster < K; cluster++) {
-                    sycl::atomic_ref<unsigned int>(sycl::global_ptr<unsigned int>(&counts[cluster])).fetch_add(count_package[cluster]);
-                    for(int d{0}; d < DIMS; d++)
-                        sycl::atomic_ref<unsigned int>(sycl::global_ptr<unsigned int>(&mean[cluster * DIMS + d])).fetch_add(mean_package[cluster * RED_DIMS_PACK_IGPU + d]);
-                        //dpct::atomic_fetch_add(&mean[cluster * DIMS + d], mean_package[cluster * RED_DIMS_PACK_IGPU + d]); 
+                    sycl::atomic_ref<unsigned int, sycl::memory_order::relaxed, sycl::memory_scope::device, sycl::access::address_space::global_space> count_ref(counts[cluster]);
+                    count_ref.fetch_add(count_package[cluster]);
+                    for(int d{0}; d < DIMS; d++){
+                        sycl::atomic_ref<float, sycl::memory_order::relaxed, sycl::memory_scope::device, sycl::access::address_space::global_space> mean_ref(mean[cluster * DIMS + d]);
+                        mean_ref.fetch_add(mean_package[cluster * RED_DIMS_PACK_IGPU + d]);
+                    }
                 }
             }
         });
@@ -492,10 +497,13 @@ void Device::_cpu_reduction() {
             }
 
             for(int cluster{0}; cluster < K; cluster++) {
+                sycl::atomic_ref<unsigned int, sycl::memory_order::relaxed, sycl::memory_scope::device, sycl::access::address_space::global_space> count_ref(count[cluster]);
+                count_ref.fetch_add(p_count[cluster]);
                 sycl::atomic_ref<unsigned int>(sycl::global_ptr<unsigned int>(&count[cluster])).fetch_add(p_count[cluster]);
-                for(int d{0}; d < DIMS; d++)
-                    sycl::atomic_ref<unsigned int>(sycl::global_ptr<unsigned int>(&mean[cluster * DIMS + d])).fetch_add(package[cluster * DIMS + d]);
-                    //dpct::atomic_fetch_add(&mean[cluster * DIMS + d], package[cluster * DIMS + d]); 
+                for(int d{0}; d < DIMS; d++) {
+                    sycl::atomic_ref<float, sycl::memory_order::relaxed, sycl::memory_scope::device, sycl::access::address_space::global_space> mean_ref(mean[cluster * DIMS + d]);
+                    mean_ref.fetch_add(package[cluster * DIMS + d]);
+                } 
             }
         });
     });
