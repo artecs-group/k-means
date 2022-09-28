@@ -499,7 +499,6 @@ void Device::_cpu_reduction() {
             for(int cluster{0}; cluster < K; cluster++) {
                 sycl::atomic_ref<unsigned int, sycl::memory_order::relaxed, sycl::memory_scope::device, sycl::access::address_space::global_space> count_ref(count[cluster]);
                 count_ref.fetch_add(p_count[cluster]);
-                sycl::atomic_ref<unsigned int>(sycl::global_ptr<unsigned int>(&count[cluster])).fetch_add(p_count[cluster]);
                 for(int d{0}; d < DIMS; d++) {
                     sycl::atomic_ref<float, sycl::memory_order::relaxed, sycl::memory_scope::device, sycl::access::address_space::global_space> mean_ref(mean[cluster * DIMS + d]);
                     mean_ref.fetch_add(package[cluster * DIMS + d]);
