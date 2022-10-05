@@ -30,7 +30,7 @@ using namespace cl::sycl;
 class CudaGpuSelector : public cl::sycl::device_selector {
     public:
         int operator()(const cl::sycl::device &Device) const override {
-            const std::string DriverVersion = Device.get_info<sycl::info::device::driver_version>();
+            const std::string DriverVersion = Device.get_info<cl::sycl::info::device::driver_version>();
 
             if (Device.is_gpu() && (DriverVersion.find("CUDA") != std::string::npos))
                 return 1;
@@ -43,7 +43,7 @@ class CudaGpuSelector : public cl::sycl::device_selector {
 class IntelGpuSelector : public cl::sycl::device_selector {
     public:
         int operator()(const cl::sycl::device &Device) const override {
-            const std::string vendor = Device.get_info<sycl::info::device::vendor>();
+            const std::string vendor = Device.get_info<cl::sycl::info::device::vendor>();
 
             if (Device.is_gpu() && (vendor.find("Intel(R) Corporation") != std::string::npos))
                 return 1;
@@ -61,13 +61,13 @@ class Device {
         void save_solution(std::vector<float>& h_mean);
 
     private:
-        sycl::queue _queue;
+        cl::sycl::queue _queue;
 
         float *attributes{nullptr}, *mean{nullptr};
         unsigned int *counts{nullptr}, *assigments{nullptr};
         int attribute_bytes{0}, mean_bytes{0}, count_bytes{0}, group_size{0}, work_items{0}, groups{0};
 
-        sycl::queue _get_queue();
+        cl::sycl::queue _get_queue();
         void _sync();
         void _assign_clusters();
         void _assign_clusters_nvidia();
