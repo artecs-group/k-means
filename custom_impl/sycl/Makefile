@@ -8,18 +8,18 @@ NVIDIA = NVIDIA_DEVICE
 PDEVICE = $(CPU)
 
 ifeq ($(DEVICE),nvidia)
-  PDEVICE = NVIDIA_DEVICE
+  PDEVICE = $(NVIDIA)
 else ifeq ($(DEVICE), igpu)
   PDEVICE = $(IGPU)
 endif
 
 CC = dpcpp
-CFLAGS = -D$(PDEVICE) -fsycl
+CFLAGS = -O3 -D$(PDEVICE) -fsycl
 CLINK = -fsycl-device-code-split=per_kernel
 
 ifeq ($(PDEVICE),NVIDIA_DEVICE)
 	CC = clang++
-	CFLAGS += -O3 -w -fsycl-targets=nvptx64-nvidia-cuda
+	CFLAGS += -w -fsycl-targets=nvptx64-nvidia-cuda
 endif
 
 ifeq ($(DEBUG),yes)

@@ -1,7 +1,23 @@
+DEVICE = cpu # {cpu, nvidia}
 DEBUG = no # {yes, no}
 
+CPU = CPU_DEVICE
+NVIDIA = NVIDIA_DEVICE
+
+PDEVICE = $(CPU)
+
+ifeq ($(DEVICE),nvidia)
+  PDEVICE = $(NVIDIA)
+endif
+
 CC = syclcc
-CFLAGS = -O3 -DNVIDIA_DEVICE --hipsycl-targets="cuda-nvcxx:cc86"
+CFLAGS = -O3 -D$(PDEVICE)
+
+ifeq ($(PDEVICE),$(NVIDIA_DEVICE))
+  CFLAGS += --hipsycl-targets="cuda-nvcxx:cc86"
+else
+  CFLAGS += --hipsycl-targets="omp" --hipsycl-use-accelerated-cpu -w
+endif
 
 ifeq ($(DEBUG),yes)
 	CFLAGS += -g

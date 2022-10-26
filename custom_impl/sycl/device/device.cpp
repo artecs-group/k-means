@@ -4,9 +4,7 @@
 #include <cfloat>
 #include <chrono>
 #include <unordered_set>
-//#include <dpct/dpct.hpp>
 #include "./device.hpp"
-
 
 inline float squared_l2_distance(float x_1, float x_2) {
     float a = x_1 - x_2;
@@ -168,7 +166,7 @@ void Device::_assign_clusters() {
         float* mean              = this->mean;
         unsigned int* assigments = this->assigments;
 
-        using global_ptr = cl::sycl::multi_ptr<float, cl::sycl::access::address_space::global_space>;
+        using global_ptr = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::global_space>;
 
         h.parallel_for<class assign_clusters>(nd_range(range(ASSIGN_PACK*group_size), range(group_size)), [=](nd_item<1> item){
             int offset       = attrs_per_pckg * item.get_group(0);
@@ -368,7 +366,8 @@ void Device::_intel_gpu_reduction() {
 
         cl::sycl::accessor<float, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> mean_package(size_mean, h);
         cl::sycl::accessor<unsigned int, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> count_package(size_count, h);
-        using global_ptr = cl::sycl::multi_ptr<float, cl::sycl::access::address_space::global_space>;
+        using global_ptr = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::global_space>;
+        using cte_local_ptr = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::local_space>;
         using local_ptr = cl::sycl::multi_ptr<float, cl::sycl::access::address_space::local_space>;
 
         h.parallel_for<class gpu_red>(nd_range<2>(group_size*groups, group_size), [=](nd_item<2> item){
@@ -400,7 +399,7 @@ void Device::_intel_gpu_reduction() {
                 for(; (d < DIMS - simd_remainder) && (d <= dim_length - simd_width); d += simd_width) {
                     int pckg_id = local_idx * K * RED_DIMS_PACK_IGPU + cluster * RED_DIMS_PACK_IGPU + d;
                     result.load(0, global_ptr(&attrs[i * DIMS + d]));
-                    v_pckg.load(0, local_ptr(&mean_package[pckg_id]));
+                    v_pckg.load(0, cte_local_ptr(&mean_package[pckg_id]));
                     result += v_pckg;
                     result.store(0, local_ptr(&mean_package[pckg_id]));
                 }
@@ -418,8 +417,8 @@ void Device::_intel_gpu_reduction() {
                         
                         int d = dim_offset;
                         for(; (d < DIMS - simd_remainder) && (d <= dim_length - simd_width); d += simd_width) {
-                            result.load(0, local_ptr(&mean_package[local_idx * K * RED_DIMS_PACK_IGPU + cluster * RED_DIMS_PACK_IGPU + d]));
-                            v_pckg.load(0, local_ptr(&mean_package[(local_idx + stride) * K * RED_DIMS_PACK_IGPU + cluster * RED_DIMS_PACK_IGPU + d]));
+                            result.load(0, cte_local_ptr(&mean_package[local_idx * K * RED_DIMS_PACK_IGPU + cluster * RED_DIMS_PACK_IGPU + d]));
+                            v_pckg.load(0, cte_local_ptr(&mean_package[(local_idx + stride) * K * RED_DIMS_PACK_IGPU + cluster * RED_DIMS_PACK_IGPU + d]));
                             result += v_pckg;
                             result.store(0, local_ptr(&mean_package[local_idx * K * RED_DIMS_PACK_IGPU + cluster * RED_DIMS_PACK_IGPU + d]));
                         }
@@ -466,7 +465,8 @@ void Device::_cpu_reduction() {
         int c_size               = K * sizeof(unsigned int);
         cl::sycl::accessor<float, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> package(p_size, h);
         cl::sycl::accessor<unsigned int, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> p_count(c_size, h);
-        using global_ptr = cl::sycl::multi_ptr<float, cl::sycl::access::address_space::global_space>;
+        using global_ptr = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::global_space>;
+        using cte_local_ptr  = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::local_space>;
         using local_ptr  = cl::sycl::multi_ptr<float, cl::sycl::access::address_space::local_space>;
 
         h.parallel_for<class cpu_red>(nd_range(range(RED_ATTRS_PACK), range(1)), [=](nd_item<1> item){
@@ -487,7 +487,7 @@ void Device::_cpu_reduction() {
                 
                 for(int d{0}; d < DIMS - simd_remainder; d += simd_width) {
                     result.load(0, global_ptr(&attrs[i * DIMS + d]));
-                    v_pckg.load(0, local_ptr(&package[cluster * DIMS + d]));
+                    v_pckg.load(0, cte_local_ptr(&package[cluster * DIMS + d]));
                     result += v_pckg;
                     result.store(0, local_ptr(&package[cluster * DIMS + d]));
                 }
@@ -516,8 +516,8 @@ void Device::_compute_mean() {
         float* mean = this->mean;
 
         h.parallel_for<class compute_mean>(nd_range(range(work_items), range(group_size)), [=](nd_item<1> item){
-            const int global_index = item.get_global_id(0);
-            const int count        = cl::sycl::max<unsigned int>(counts[global_index], 1); 
+            const int global_index   = item.get_global_id(0);
+            const unsigned int count = counts[global_index] > 0 ? counts[global_index] : 1; 
             for(int d{0}; d < DIMS; d++)
                 mean[global_index * DIMS + d] /= count;
         });
