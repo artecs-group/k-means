@@ -17,7 +17,7 @@ endif
 
 ifeq ($(SYCL), dpcpp)
 	CC = dpcpp
-	CFLAGS = -O3 -D$(PDEVICE) -fsycl
+	CFLAGS = -O3 -D$(PDEVICE) -DDPCPP -fsycl
 	CLINK = -fsycl-device-code-split=per_kernel
 
 	ifeq ($(PDEVICE), $(NVIDIA))
@@ -29,7 +29,7 @@ else
 		$(error 'DEVICE=igpu' option is not allowed in conjunction to 'SYCL=hipsycl'.)
 	endif
 	CC = syclcc
-	CFLAGS = -O3 -D$(PDEVICE)
+	CFLAGS = -O3 -D$(PDEVICE) -DHIPSYCL
 	ifeq ($(PDEVICE),$(NVIDIA))
 		ifeq ($(HIPSYCL_COMPILER),clang)
 			CFLAGS += --hipsycl-targets="cuda:sm_61" -I/usr/local/cuda/include

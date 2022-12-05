@@ -6,6 +6,13 @@
 #include <unordered_set>
 #include "./device.hpp"
 
+#if defined(DPCPP)
+// this definitions could change over time and moved to other place
+#include <sycl/ext/oneapi/experimental/cuda/builtins.hpp>
+using namespace sycl::ext::oneapi::experimental::cuda;
+using namespace sycl::ext::oneapi::experimental;
+#endif
+
 inline float squared_l2_distance(float x_1, float x_2) {
     float a = x_1 - x_2;
     return a*a;
