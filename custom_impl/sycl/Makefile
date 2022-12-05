@@ -1,5 +1,7 @@
 DEVICE = cpu # {cpu, nvidia, igpu}
 DEBUG = no # {yes, no}
+SYCL = dpcpp # {dpcpp, hipsycl}: hipsycl does not support igpu
+HIPSYCL_COMPILER = clang # {clang, nvc++}
 
 CPU = CPU_DEVICE
 IGPU = INTEL_GPU_DEVICE
@@ -8,20 +10,36 @@ NVIDIA = NVIDIA_DEVICE
 PDEVICE = $(CPU)
 
 ifeq ($(DEVICE),nvidia)
-  PDEVICE = NVIDIA_DEVICE
+  PDEVICE = $(NVIDIA)
 else ifeq ($(DEVICE), igpu)
   PDEVICE = $(IGPU)
 endif
 
-CC = dpcpp
-CFLAGS = -D$(PDEVICE) -fsycl
-CLINK = -fsycl-device-code-split=per_kernel
+ifeq ($(SYCL), dpcpp)
+	CC = dpcpp
+	CFLAGS = -O3 -D$(PDEVICE) -fsycl
+	CLINK = -fsycl-device-code-split=per_kernel
 
-ifeq ($(PDEVICE),NVIDIA_DEVICE)
-	CC = clang++
-#	DPCT_INCLUDE_DIR = ${ONEAPI_ROOT}/dpcpp-ct/latest/include/
-	CFLAGS += -O3 -w -fsycl-targets=nvptx64-nvidia-cuda
-# -I$(DPCT_INCLUDE_DIR)
+	ifeq ($(PDEVICE), $(NVIDIA))
+		CC = clang++
+		CFLAGS += -w -fsycl-targets=nvptx64-nvidia-cuda
+	endif
+else
+	ifeq ($(PDEVICE), $(IGPU))
+		$(error 'DEVICE=igpu' option is not allowed in conjunction to 'SYCL=hipsycl'.)
+	endif
+	CC = syclcc
+	CFLAGS = -O3 -D$(PDEVICE)
+	ifeq ($(PDEVICE),$(NVIDIA))
+		ifeq ($(HIPSYCL_COMPILER),clang)
+			CFLAGS += --hipsycl-targets="cuda:sm_61" -I/usr/local/cuda/include
+			CLINK = -L/usr/local/cuda/include
+		else
+			CFLAGS += --hipsycl-targets="cuda-nvcxx:cc61"
+		endif
+	else
+		CFLAGS += --hipsycl-targets="omp" --hipsycl-use-accelerated-cpu -w
+	endif  
 endif
 
 ifeq ($(DEBUG),yes)
