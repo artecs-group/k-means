@@ -1,1 +1,9 @@
 *.o
+.vscode/
+__pycache__
+*.txt
+k_means
+kmeans
+venv/
+*.exe
+*.nvvp
