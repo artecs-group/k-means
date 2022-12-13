@@ -31,11 +31,11 @@ else
 	CC = syclcc
 	CFLAGS = -O3 -D$(PDEVICE) -DHIPSYCL
 	ifeq ($(PDEVICE),$(NVIDIA))
-		ifeq ($(HIPSYCL_COMPILER),clang)
+		ifeq ($(HIPSYCL_COMPILER),nvc++)
+			CFLAGS += --hipsycl-targets="cuda-nvcxx:cc61"
+		else
 			CFLAGS += --hipsycl-targets="cuda:sm_61" -I/usr/local/cuda/include
 			CLINK = -L/usr/local/cuda/include
-		else
-			CFLAGS += --hipsycl-targets="cuda-nvcxx:cc61"
 		endif
 	else
 		CFLAGS += --hipsycl-targets="omp" --hipsycl-use-accelerated-cpu -w

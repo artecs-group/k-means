@@ -6,12 +6,12 @@
 #include <unordered_set>
 #include "./device.hpp"
 
-#if defined(DPCPP)
-// this definitions could change over time and moved to other place
-#include <sycl/ext/oneapi/experimental/cuda/builtins.hpp>
-using namespace sycl::ext::oneapi::experimental::cuda;
-using namespace sycl::ext::oneapi::experimental;
-#endif
+// #if defined(DPCPP)
+// // this definitions could change over time and moved to other place
+// #include <sycl/ext/oneapi/experimental/cuda/builtins.hpp>
+// using namespace sycl::ext::oneapi::experimental::cuda;
+// using namespace sycl::ext::oneapi::experimental;
+// #endif
 
 inline float squared_l2_distance(float x_1, float x_2) {
     float a = x_1 - x_2;
@@ -242,6 +242,9 @@ void Device::_assign_clusters_nvidia() {
         unsigned int* assigments = this->assigments;
 
         h.parallel_for<class assign_clusters_nvidia>(nd_range(range(blocks*block_size), range(block_size)), [=](nd_item<1> item){
+#if defined(HIPSYCL)
+            __hipsycl_if_target_cuda(
+#endif
             const int global_idx = item.get_global_id(0);
 
             if(global_idx < ATTRIBUTE_SIZE) {
@@ -251,7 +254,7 @@ void Device::_assign_clusters_nvidia() {
                 for (int cluster = 0; cluster < K; cluster++) {
                     distance = 0.0f;
                     for(int d = 0; d < DIMS; d++)
-                        distance += squared_l2_distance(attrs[d * ATTRIBUTE_SIZE + global_idx], mean[cluster * DIMS + d]);
+                        distance += squared_l2_distance(__ldg(&attrs[d * ATTRIBUTE_SIZE + global_idx]), __ldg(&mean[cluster * DIMS + d]));
 
                     if(distance < best_distance) {
                         best_distance = distance;
@@ -261,6 +264,9 @@ void Device::_assign_clusters_nvidia() {
 
                 assigments[global_idx] = best_cluster;
             }
+#if defined(HIPSYCL)
+            );
+#endif
         });
     });
 }
@@ -293,6 +299,9 @@ void Device::_nvidia_reduction() {
         cl::sycl::accessor<unsigned int, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> label_package(size_label, h);
 
         h.parallel_for<class gpu_nvidia_red>(nd_range<2>(groups*group_size, group_size), [=](nd_item<2> item){
+#if defined(HIPSYCL)
+            __hipsycl_if_target_cuda(
+#endif
             int gid_x   = item.get_group(1);
             int baseRow = item.get_group(0) * RED_DIMS_PACK_NVIDIA; // Base row of the block
             int row     = baseRow + item.get_local_id(0); // Row of child thread
@@ -306,9 +315,9 @@ void Device::_nvidia_reduction() {
 
             // Load the values and cluster labels of instances into shared memory
             if (col < (offset + length) && row < DIMS) {
-                mean_package[item.get_local_id(0) * RED_DIMS_PACK_NVIDIA + item.get_local_id(1)] = attrs[row * ATTRIBUTE_SIZE + col];
+                mean_package[item.get_local_id(0) * RED_DIMS_PACK_NVIDIA + item.get_local_id(1)] = __ldg(&attrs[row * ATTRIBUTE_SIZE + col]);
                 if (item.get_local_id(0) == 0)
-                    label_package[item.get_local_id(1)] = assigments[col];
+                    label_package[item.get_local_id(1)] = __ldg(&assigments[col]);
             }
             item.barrier(cl::sycl::access::fence_space::local_space);
 
@@ -340,6 +349,9 @@ void Device::_nvidia_reduction() {
                     }
                 }
             }
+#if defined(HIPSYCL)
+            );
+#endif
         });
     });
 }

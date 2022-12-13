@@ -12,7 +12,7 @@ __device__ inline float squared_l2_distance(float x_1, float x_2) {
 }
 
 
-__global__ void assign_clusters(float* __restrict__ attrs, float* __restrict__ mean, 
+__global__ void assign_clusters(const float* __restrict__ attrs, const float* __restrict__ mean, 
     unsigned int* __restrict__ assigments)
 { 
     const int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -38,8 +38,8 @@ __global__ void assign_clusters(float* __restrict__ attrs, float* __restrict__ m
 
 
 __global__ void reduction(size_t sh_offset, int remainder_attr, int quotient_attr, int remainder_dims,
-    int quotient_dims, float* __restrict__ attrs, float* __restrict__ mean, 
-    unsigned int* __restrict__ assigments, unsigned int* __restrict__ counts)
+    int quotient_dims, const float* __restrict__ attrs, float* __restrict__ mean, 
+    const unsigned int* __restrict__ assigments, unsigned int* __restrict__ counts)
 {
     extern __shared__ float mean_package[];
     unsigned int* label_package = (unsigned int*) &mean_package[sh_offset];
@@ -90,7 +90,7 @@ __global__ void reduction(size_t sh_offset, int remainder_attr, int quotient_att
 }
 
 
-__global__ void compute_mean(float* __restrict__ mean, unsigned int* __restrict__ counts)
+__global__ void compute_mean(float* __restrict__ mean, const unsigned int* __restrict__ counts)
 {
     const int global_index = blockIdx.x * blockDim.x + threadIdx.x;
     int count = counts[global_index];

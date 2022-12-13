@@ -29,10 +29,10 @@ using namespace cl::sycl;
 // CUDA GPU selector
 class CudaGpuSelector : public cl::sycl::device_selector {
     public:
-        int operator()(const cl::sycl::device &Device) const override {
-            const std::string DriverVersion = Device.get_info<cl::sycl::info::device::driver_version>();
+        int operator()(const cl::sycl::device &device) const override {
+            const std::string vendor = device.get_info<cl::sycl::info::device::vendor>();
 
-            if (Device.is_gpu() && (DriverVersion.find("CUDA") != std::string::npos))
+            if (device.is_gpu() && (vendor.find("NVIDIA") != std::string::npos))
                 return 1;
 
             return 0;
@@ -42,10 +42,10 @@ class CudaGpuSelector : public cl::sycl::device_selector {
 // Intel GPU
 class IntelGpuSelector : public cl::sycl::device_selector {
     public:
-        int operator()(const cl::sycl::device &Device) const override {
-            const std::string vendor = Device.get_info<cl::sycl::info::device::vendor>();
+        int operator()(const cl::sycl::device &device) const override {
+            const std::string vendor = device.get_info<cl::sycl::info::device::vendor>();
 
-            if (Device.is_gpu() && (vendor.find("Intel(R) Corporation") != std::string::npos))
+            if (device.is_gpu() && (vendor.find("Intel(R) Corporation") != std::string::npos))
                 return 1;
 
             return 0;
