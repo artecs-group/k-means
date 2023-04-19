@@ -70,6 +70,7 @@ cl::sycl::queue Device::_get_queue() {
 
         return -1;
     };
+    cl::sycl::queue queue{selector};
 #elif defined(NVIDIA_DEVICE)
     auto selector = [](const sycl::device &Device) {
         const std::string DriverVersion = Device.get_info<sycl::info::device::driver_version>();
@@ -79,13 +80,13 @@ cl::sycl::queue Device::_get_queue() {
 
         return -1;
     };
+    cl::sycl::queue queue{selector};
 #elif defined(CPU_DEVICE)	
-	sycl::cpu_selector_v selector{};
+    cl::sycl::queue queue{sycl::cpu_selector_v};
 #else
-	sycl::default_selector_v selector{};
+    cl::sycl::queue queue{sycl::default_selector_v};
 #endif
-
-	cl::sycl::queue queue{selector};
+	
 	std::cout << "Running on \"" << queue.get_device().get_info<cl::sycl::info::device::name>() << "\" under SYCL." << std::endl;
     return queue;
 }
