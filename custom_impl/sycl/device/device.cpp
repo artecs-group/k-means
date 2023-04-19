@@ -111,8 +111,8 @@ void Device::run_k_means() {
         _cpu_reduction();
 #elif defined(SYCL_NGPU)
         _nvidia_reduction();
-#elif defined(SYCL_IGPU)
-        _intel_gpu_reduction();
+// #elif defined(SYCL_IGPU)
+//         _intel_gpu_reduction();
 #else
         _common_gpu_reduction();
 #endif
