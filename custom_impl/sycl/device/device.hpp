@@ -13,16 +13,17 @@
 
 #define RED_ATTRS_PACK_NVIDIA 128
 #define RED_DIMS_PACK_NVIDIA 4
-#define RED_ATTRS_PACK 16
+#define RED_ATTRS_PACK 64
 #define RED_DIMS_PACK_IGPU 4
 #define RED_GROUP_SIZE_IGPU 256
-#define RED_SIMD_WIDTH 4
+#define RED_GROUP_SIZE 256 // also depends on the memory 
+#define RED_SIMD_WIDTH 8
 
 #define ASSIGN_BLOCK_SIZE_NVIDIA 128
-#define ASSIGN_PACK 3
+#define ASSIGN_PACK 512
 #define ASSIGN_GROUP_SIZE_CPU 1
 #define ASSIGN_GROUP_SIZE_IGPU 256
-#define ASSIGN_SIMD_WIDTH 4
+#define ASSIGN_SIMD_WIDTH 8
 
 using namespace cl::sycl;
 
@@ -42,11 +43,12 @@ class Device {
 
         cl::sycl::queue _get_queue();
         void _sync();
+        void _assign_clusters_simd();
         void _assign_clusters();
-        void _assign_clusters_nvidia();
         void _cpu_reduction();
         void _intel_gpu_reduction();
         void _nvidia_reduction();
+        void _common_gpu_reduction();
         void _compute_mean();
         std::tuple<int,int,int> _get_group_work_items(int elements);
 };

@@ -23,7 +23,7 @@ SNGPU = SYCL_NGPU
 SIGPU = SYCL_IGPU
 SCOM = SYCL_COMMON
 
-PIMPL = $(SYCL_CPU)
+PIMPL = $(SCPU)
 
 ifeq ($(IMPL),sycl-ngpu)
   PIMPL = $(SNGPU)
