@@ -1,23 +1,41 @@
-DEVICE = cpu # {cpu, nvidia, igpu}
+DEVICE = cpu # {cpu, ngpu, igpu}
 DEBUG = no # {yes, no}
+IMPL = sycl-cpu # {sycl-cpu, sycl-ngpu, sycl-igpu, sycl-com}
 SYCL = dpcpp # {dpcpp, hipsycl}: hipsycl does not support igpu
 HIPSYCL_COMPILER = clang # {clang, nvc++}
 
+# device
 CPU = CPU_DEVICE
 IGPU = INTEL_GPU_DEVICE
 NVIDIA = NVIDIA_DEVICE
 
 PDEVICE = $(CPU)
 
-ifeq ($(DEVICE),nvidia)
+ifeq ($(DEVICE),ngpu)
   PDEVICE = $(NVIDIA)
 else ifeq ($(DEVICE), igpu)
   PDEVICE = $(IGPU)
 endif
 
+# implementation
+SCPU = SYCL_CPU
+SNGPU = SYCL_NGPU
+SIGPU = SYCL_IGPU
+SCOM = SYCL_COMMON
+
+PIMPL = $(SYCL_CPU)
+
+ifeq ($(IMPL),sycl-ngpu)
+  PIMPL = $(SNGPU)
+else ifeq ($(IMPL), sycl-igpu)
+  PIMPL = $(SIGPU)
+else ifeq ($(IMPL), sycl-com)
+  PIMPL = $(SCOM)
+endif
+
 ifeq ($(SYCL), dpcpp)
-	CC = dpcpp
-	CFLAGS = -O3 -D$(PDEVICE) -DDPCPP -fsycl
+	CC = icpx
+	CFLAGS = -O3 -D$(PDEVICE) -D$(PIMPL) -DDPCPP -fsycl
 	CLINK = -fsycl-device-code-split=per_kernel
 
 	ifeq ($(PDEVICE), $(NVIDIA))
@@ -29,7 +47,7 @@ else
 		$(error 'DEVICE=igpu' option is not allowed in conjunction to 'SYCL=hipsycl'.)
 	endif
 	CC = syclcc
-	CFLAGS = -O3 -D$(PDEVICE) -DHIPSYCL
+	CFLAGS = -O3 -D$(PDEVICE) -D$(PIMPL) -DHIPSYCL
 	ifeq ($(PDEVICE),$(NVIDIA))
 		ifeq ($(HIPSYCL_COMPILER),nvc++)
 			CFLAGS += --hipsycl-targets="cuda-nvcxx:cc61"

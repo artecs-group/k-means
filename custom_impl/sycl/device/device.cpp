@@ -6,13 +6,6 @@
 #include <unordered_set>
 #include "./device.hpp"
 
-// #if defined(DPCPP)
-// // this definitions could change over time and moved to other place
-// #include <sycl/ext/oneapi/experimental/cuda/builtins.hpp>
-// using namespace sycl::ext::oneapi::experimental::cuda;
-// using namespace sycl::ext::oneapi::experimental;
-// #endif
-
 inline float squared_l2_distance(float x_1, float x_2) {
     float a = x_1 - x_2;
     return a*a;
@@ -44,7 +37,7 @@ Device::Device(std::vector<float>& h_attrs){
         do { idx = indices(rng); } while(idxs.find(idx) != idxs.end());
         idxs.insert(idx);
         for(int d{0}; d < DIMS; d++) {
-#if defined(NVIDIA_DEVICE)
+#if defined(SYCL_NGPU)
             h_mean.push_back(h_attrs[d * ATTRIBUTE_SIZE + idx]);
 #else
             h_mean.push_back(h_attrs[idx * DIMS + d]);
@@ -69,13 +62,27 @@ Device::~Device() {
 
 cl::sycl::queue Device::_get_queue() {
 #if defined(INTEL_GPU_DEVICE)
-	IntelGpuSelector selector{};
+    auto selector = [](const sycl::device &Device) {
+        const std::string vendor = Device.get_info<sycl::info::device::vendor>();
+
+        if (Device.is_gpu() && (vendor.find("Intel(R) Corporation") != std::string::npos))
+            return 1;
+
+        return -1;
+    };
 #elif defined(NVIDIA_DEVICE)
-	CudaGpuSelector selector{};
+    auto selector = [](const sycl::device &Device) {
+        const std::string DriverVersion = Device.get_info<sycl::info::device::driver_version>();
+
+        if (Device.is_gpu() && (DriverVersion.find("CUDA") != std::string::npos))
+            return 1;
+
+        return -1;
+    };
 #elif defined(CPU_DEVICE)	
-	cpu_selector selector{};
+	sycl::cpu_selector_v selector{};
 #else
-	default_selector selector{};
+	sycl::default_selector_v selector{};
 #endif
 
 	cl::sycl::queue queue{selector};
@@ -89,7 +96,7 @@ void Device::run_k_means() {
     float t_assign{0}, t_reduction{0}, t_mean{0};
     for (size_t i{0}; i < ITERATIONS; i++) {
         start = std::chrono::high_resolution_clock::now();
-#if defined(NVIDIA_DEVICE)
+#if defined(SYCL_NGPU)
         _assign_clusters_nvidia();
 #else
         _assign_clusters();
@@ -99,9 +106,9 @@ void Device::run_k_means() {
         t_assign += std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
 
         start = std::chrono::high_resolution_clock::now();
-#if defined(CPU_DEVICE)
+#if defined(SYCL_CPU)
         _cpu_reduction();
-#elif defined(NVIDIA_DEVICE)
+#elif defined(SYCL_NGPU)
         _nvidia_reduction();
 #else
         _intel_gpu_reduction();
@@ -254,7 +261,7 @@ void Device::_assign_clusters_nvidia() {
                 for (int cluster = 0; cluster < K; cluster++) {
                     distance = 0.0f;
                     for(int d = 0; d < DIMS; d++)
-                        distance += squared_l2_distance(__ldg(&attrs[d * ATTRIBUTE_SIZE + global_idx]), __ldg(&mean[cluster * DIMS + d]));
+                        distance += squared_l2_distance(attrs[d * ATTRIBUTE_SIZE + global_idx], mean[cluster * DIMS + d]);
 
                     if(distance < best_distance) {
                         best_distance = distance;
@@ -295,8 +302,8 @@ void Device::_nvidia_reduction() {
         size_t size_mean            = RED_DIMS_PACK_NVIDIA * RED_ATTRS_PACK_NVIDIA * sizeof(float);
         size_t size_label           = RED_ATTRS_PACK_NVIDIA * sizeof(unsigned int);
 
-        cl::sycl::accessor<float, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> mean_package(size_mean, h);
-        cl::sycl::accessor<unsigned int, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> label_package(size_label, h);
+        cl::sycl::local_accessor<float, 1> mean_package(size_mean, h);
+        cl::sycl::local_accessor<unsigned int, 1> label_package(size_label, h);
 
         h.parallel_for<class gpu_nvidia_red>(nd_range<2>(groups*group_size, group_size), [=](nd_item<2> item){
 #if defined(HIPSYCL)
@@ -315,9 +322,9 @@ void Device::_nvidia_reduction() {
 
             // Load the values and cluster labels of instances into shared memory
             if (col < (offset + length) && row < DIMS) {
-                mean_package[item.get_local_id(0) * RED_DIMS_PACK_NVIDIA + item.get_local_id(1)] = __ldg(&attrs[row * ATTRIBUTE_SIZE + col]);
+                mean_package[item.get_local_id(0) * RED_DIMS_PACK_NVIDIA + item.get_local_id(1)] = attrs[row * ATTRIBUTE_SIZE + col];
                 if (item.get_local_id(0) == 0)
-                    label_package[item.get_local_id(1)] = __ldg(&assigments[col]);
+                    label_package[item.get_local_id(1)] = assigments[col];
             }
             item.barrier(cl::sycl::access::fence_space::local_space);
 
@@ -383,8 +390,8 @@ void Device::_intel_gpu_reduction() {
         size_t size_mean            = att_group_size * K * RED_DIMS_PACK_IGPU * sizeof(float);
         size_t size_count           = att_group_size * K * sizeof(float);
 
-        cl::sycl::accessor<float, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> mean_package(size_mean, h);
-        cl::sycl::accessor<unsigned int, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> count_package(size_count, h);
+        cl::sycl::local_accessor<float, 1> mean_package(size_mean, h);
+        cl::sycl::local_accessor<unsigned int, 1> count_package(size_count, h);
         using global_ptr = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::global_space>;
         using cte_local_ptr = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::local_space>;
         using local_ptr = cl::sycl::multi_ptr<float, cl::sycl::access::address_space::local_space>;
@@ -482,8 +489,8 @@ void Device::_cpu_reduction() {
         unsigned int* assigments = this->assigments;
         int p_size               = K * DIMS * sizeof(float);
         int c_size               = K * sizeof(unsigned int);
-        cl::sycl::accessor<float, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> package(p_size, h);
-        cl::sycl::accessor<unsigned int, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> p_count(c_size, h);
+        cl::sycl::local_accessor<float, 1> package(p_size, h);
+        cl::sycl::local_accessor<unsigned int, 1> p_count(c_size, h);
         using global_ptr = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::global_space>;
         using cte_local_ptr  = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::local_space>;
         using local_ptr  = cl::sycl::multi_ptr<float, cl::sycl::access::address_space::local_space>;
