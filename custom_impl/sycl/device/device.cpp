@@ -402,7 +402,7 @@ void Device::_intel_gpu_reduction() {
         const unsigned int* assigments = this->assigments;
         unsigned int* counts           = this->counts;
 
-        sycl::local_accessor<unsigned int, 1> countLocal(K * sizeof(unsigned int), h);
+        sycl::local_accessor<unsigned int, 1> countLocal(K, h);
         using cte_global_ptr = sycl::multi_ptr<const float, sycl::access::address_space::global_space>;
         using global_ptr = sycl::multi_ptr<float, sycl::access::address_space::global_space>;
 
@@ -498,13 +498,12 @@ void Device::_cpu_reduction() {
 
     _queue.submit([&](handler &h) {
         unsigned int* count      = this->counts;
-        float* attrs             = this->attributes;
+        const float* attrs             = this->attributes;
         float* mean              = this->mean;
-        unsigned int* assigments = this->assigments;
-        int p_size               = K * DIMS * sizeof(float);
-        int c_size               = K * sizeof(unsigned int);
-        cl::sycl::local_accessor<float, 1> package(p_size, h);
-        cl::sycl::local_accessor<unsigned int, 1> p_count(c_size, h);
+        const unsigned int* assigments = this->assigments;
+
+        cl::sycl::local_accessor<float, 1> package(K * DIMS, h);
+        cl::sycl::local_accessor<unsigned int, 1> p_count(K, h);
         using global_ptr = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::global_space>;
         using cte_local_ptr  = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::local_space>;
         using local_ptr  = cl::sycl::multi_ptr<float, cl::sycl::access::address_space::local_space>;
