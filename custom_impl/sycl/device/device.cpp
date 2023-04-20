@@ -177,7 +177,7 @@ void Device::_assign_clusters_simd() {
 #if defined(CPU_DEVICE)
     constexpr int group_size = ASSIGN_GROUP_SIZE_CPU;
 #else //GPU
-    constexpr int group_size = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
+    const int group_size = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
 #endif
     constexpr int B              = 2;
     constexpr int simd_width     = ASSIGN_SIMD_WIDTH; //check that simd_width < DIMS
