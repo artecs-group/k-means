@@ -14,9 +14,6 @@
 #define RED_ATTRS_PACK_NVIDIA 128
 #define RED_DIMS_PACK_NVIDIA 4
 #define RED_ATTRS_PACK 64
-#define RED_DIMS_PACK_IGPU 4
-#define RED_GROUP_SIZE_IGPU 256
-#define RED_GROUP_SIZE 256 // also depends on the memory 
 #define RED_SIMD_WIDTH 8
 
 #define ASSIGN_BLOCK_SIZE_NVIDIA 128
@@ -37,7 +34,7 @@ class Device {
     private:
         cl::sycl::queue _queue;
 
-        float *attributes{nullptr}, *mean{nullptr};
+        float *attributes{nullptr}, *mean{nullptr}, *meanPrivate{nullptr};
         unsigned int *counts{nullptr}, *assigments{nullptr};
         int attribute_bytes{0}, mean_bytes{0}, count_bytes{0}, group_size{0}, work_items{0}, groups{0};
 
@@ -48,7 +45,7 @@ class Device {
         void _cpu_reduction();
         void _intel_gpu_reduction();
         void _nvidia_reduction();
-        void _common_gpu_reduction();
+        void _common_reduction();
         void _compute_mean();
         std::tuple<int,int,int> _get_group_work_items(int elements);
 };
