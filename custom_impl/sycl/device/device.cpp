@@ -186,8 +186,8 @@ void Device::_assign_clusters_simd() {
     const int remainder_pckg     = ATTRIBUTE_SIZE % ASSIGN_PACK;
 
     _queue.submit([&](handler& h) {
-        const float* attrs             = this->attributes;
-        const float* mean              = this->mean;
+        const float* attrs       = this->attributes;
+        const float* mean        = this->mean;
         unsigned int* assigments = this->assigments;
 
         using global_ptr = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::global_space>;
@@ -502,22 +502,23 @@ void Device::_cpu_reduction() {
         float* mean              = this->mean;
         const unsigned int* assigments = this->assigments;
 
-        cl::sycl::local_accessor<float, 1> package(K * DIMS, h);
+        //cl::sycl::local_accessor<float, 1> package(K * DIMS, h);
         cl::sycl::local_accessor<unsigned int, 1> p_count(K, h);
         using global_ptr = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::global_space>;
-        using cte_local_ptr  = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::local_space>;
-        using local_ptr  = cl::sycl::multi_ptr<float, cl::sycl::access::address_space::local_space>;
+        using cte_private_ptr  = cl::sycl::multi_ptr<const float, cl::sycl::access::address_space::private_space>;
+        using private_ptr  = cl::sycl::multi_ptr<float, cl::sycl::access::address_space::private_space>;
 
         h.parallel_for<class cpu_red>(nd_range(range(RED_ATTRS_PACK), range(1)), [=](nd_item<1> item){
             const int global_idx = item.get_global_id(0);
             const int offset     = attrs_per_CU * global_idx;
             const int length     = (global_idx == RED_ATTRS_PACK-1) ? attrs_per_CU + remaining : attrs_per_CU;
+            float package[K * DIMS]{0};
             cl::sycl::vec<float, simd_width> simd_mean, simd_result;
 
             for(int i{0}; i < K; i++) {
                 p_count[i] = 0.0;
-                for(int j{0}; j < DIMS; j++)
-                    package[i*DIMS + j] = 0.0;
+                // for(int j{0}; j < DIMS; j++)
+                //     package[i*DIMS + j] = 0.0;
             }
 
             for (int i{offset}; i < offset + length; i++) {
@@ -526,9 +527,9 @@ void Device::_cpu_reduction() {
                 
                 for(int d{0}; d < DIMS - simd_remainder; d += simd_width) {
                     simd_result.load(0, global_ptr(&attrs[i * DIMS + d]));
-                    simd_mean.load(0, cte_local_ptr(&package[cluster * DIMS + d]));
+                    simd_mean.load(0, cte_private_ptr(&package[cluster * DIMS + d]));
                     simd_result += simd_mean;
-                    simd_result.store(0, local_ptr(&package[cluster * DIMS + d]));
+                    simd_result.store(0, private_ptr(&package[cluster * DIMS + d]));
                 }
                 // calculate remaining DIMS
                 for(int d{DIMS - simd_remainder}; d < DIMS; d++)

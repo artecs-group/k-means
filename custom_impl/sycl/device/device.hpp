@@ -8,7 +8,7 @@
 
 #define ATTRIBUTE_SIZE 2458285
 #define DIMS           68
-#define K              4
+#define K              256
 #define ITERATIONS     20
 
 #define RED_ATTRS_PACK_NVIDIA 128
@@ -17,9 +17,9 @@
 #define RED_SIMD_WIDTH 8
 
 #define ASSIGN_BLOCK_SIZE_NVIDIA 128
-#define ASSIGN_PACK 512
+#define ASSIGN_PACK 16
 #define ASSIGN_GROUP_SIZE_CPU 1
-#define ASSIGN_SIMD_WIDTH 8
+#define ASSIGN_SIMD_WIDTH 1
 
 using namespace cl::sycl;
 
