@@ -19,7 +19,6 @@
 #define ASSIGN_BLOCK_SIZE_NVIDIA 128
 #define ASSIGN_PACK 512
 #define ASSIGN_GROUP_SIZE_CPU 1
-#define ASSIGN_GROUP_SIZE_IGPU 256
 #define ASSIGN_SIMD_WIDTH 8
 
 using namespace cl::sycl;
