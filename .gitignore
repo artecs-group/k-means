@@ -7,3 +7,4 @@ kmeans
 venv/
 *.exe
 *.nvvp
+data/program_times
