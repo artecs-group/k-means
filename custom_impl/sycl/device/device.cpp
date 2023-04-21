@@ -69,33 +69,16 @@ Device::~Device() {
 
 cl::sycl::queue Device::_get_queue() {
 #if defined(INTEL_GPU_DEVICE)
-    auto selector = [](const sycl::device &Device) {
-        const std::string vendor = Device.get_info<sycl::info::device::vendor>();
-
-        if (Device.is_gpu() && (vendor.find("Intel(R) Corporation") != std::string::npos))
-            return 1;
-
-        return -1;
-    };
-    cl::sycl::queue queue{selector};
+	IntelGpuSelector selector{};
 #elif defined(NVIDIA_DEVICE)
-    auto selector = [](const sycl::device &Device) {
-        const std::string DriverVersion = Device.get_info<sycl::info::device::driver_version>();
-
-        if (Device.is_gpu() && (DriverVersion.find("CUDA") != std::string::npos))
-            return 1;
-
-        return -1;
-    };
-    cl::sycl::queue queue{selector};
+	CudaGpuSelector selector{};
 #elif defined(CPU_DEVICE)	
-    //cl::sycl::queue queue{sycl::cpu_selector_v};
-    cl::sycl::queue queue{sycl::cpu_selector{}};
+	cpu_selector selector{};
 #else
-    //cl::sycl::queue queue{sycl::default_selector_v};
-    cl::sycl::queue queue{sycl::default_selector{}};
+	default_selector selector{};
 #endif
-	
+
+	cl::sycl::queue queue{selector};
 	std::cout << "Running on \"" << queue.get_device().get_info<cl::sycl::info::device::name>() << "\" under SYCL." << std::endl;
     return queue;
 }

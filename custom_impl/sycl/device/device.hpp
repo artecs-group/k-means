@@ -23,6 +23,32 @@
 
 using namespace cl::sycl;
 
+// CUDA GPU selector
+class CudaGpuSelector : public cl::sycl::device_selector {
+    public:
+        int operator()(const cl::sycl::device &device) const override {
+            const std::string vendor = device.get_info<cl::sycl::info::device::vendor>();
+
+            if (device.is_gpu() && (vendor.find("NVIDIA") != std::string::npos))
+                return 1;
+
+            return 0;
+        }
+};
+
+// Intel GPU
+class IntelGpuSelector : public cl::sycl::device_selector {
+    public:
+        int operator()(const cl::sycl::device &device) const override {
+            const std::string vendor = device.get_info<cl::sycl::info::device::vendor>();
+
+            if (device.is_gpu() && (vendor.find("Intel(R) Corporation") != std::string::npos))
+                return 1;
+
+            return 0;
+        }
+};
+
 class Device {
     public:
         Device(std::vector<float>& h_attrs);
