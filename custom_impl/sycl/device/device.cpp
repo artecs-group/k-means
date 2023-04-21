@@ -164,7 +164,7 @@ void Device::_assign_clusters_simd() {
 #if defined(CPU_DEVICE)
     constexpr int group_size = ASSIGN_GROUP_SIZE_CPU;
 #else //GPU
-    const int group_size = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
+    const int group_size = ASSIGN_GROUP_SIZE_IGPU;
 #endif
     constexpr int B              = 2;
     constexpr int simd_width     = ASSIGN_SIMD_WIDTH; //check that simd_width < DIMS
@@ -420,7 +420,7 @@ void Device::_nvidia_reduction() {
 void Device::_intel_gpu_reduction() {
     constexpr int attrs_per_pckg = ATTRIBUTE_SIZE / RED_ATTRS_PACK;
     constexpr int remainder_pckg = ATTRIBUTE_SIZE % RED_ATTRS_PACK;
-    const int g_size = _queue.get_device().get_info<cl::sycl::info::device::max_work_group_size>();
+    constexpr int g_size = RED_GROUP_SIZE_IGPU;
 
     const cl::sycl::range<1> group_size(g_size);
     const cl::sycl::range<1> groups(RED_ATTRS_PACK);
