@@ -13,13 +13,13 @@
 
 #define RED_ATTRS_PACK_NVIDIA 128
 #define RED_DIMS_PACK_NVIDIA 4
-#define RED_ATTRS_PACK 64
+#define RED_ATTRS_PACK 8
 #define RED_SIMD_WIDTH 8
 
 #define ASSIGN_BLOCK_SIZE_NVIDIA 128
-#define ASSIGN_PACK 16
-#define ASSIGN_GROUP_SIZE_CPU 1
-#define ASSIGN_SIMD_WIDTH 1
+#define ASSIGN_PACK 512
+#define ASSIGN_GROUP_SIZE_CPU 8
+#define ASSIGN_SIMD_WIDTH 8
 
 using namespace cl::sycl;
 
@@ -40,7 +40,8 @@ class Device {
         cl::sycl::queue _get_queue();
         void _sync();
         void _assign_clusters_simd();
-        void _assign_clusters();
+        void _assign_clusters_nvidia();
+        void _assign_clusters_common();
         void _cpu_reduction();
         void _intel_gpu_reduction();
         void _nvidia_reduction();
