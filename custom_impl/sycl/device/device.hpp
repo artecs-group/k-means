@@ -6,24 +6,6 @@
 #include <string>
 #include <CL/sycl.hpp>
 
-// portable implementation
-#define RED_ATTRS_PACK_CPU 8
-#define RED_DIMS_PACK_CPU 1
-#define RED_ATTRS_PACK_IGPU 128
-#define RED_DIMS_PACK_IGPU 4
-
-#define RED_ATTRS_PACK_NVIDIA 128
-#define RED_DIMS_PACK_NVIDIA 4
-#define RED_ATTRS_PACK 16
-#define RED_SIMD_WIDTH 8
-#define RED_GROUP_SIZE_IGPU 512
-
-#define ASSIGN_BLOCK_SIZE_NVIDIA 128
-#define ASSIGN_PACK 16
-#define ASSIGN_GROUP_SIZE_CPU 8
-#define ASSIGN_GROUP_SIZE_IGPU 512
-#define ASSIGN_SIMD_WIDTH 2
-
 using namespace cl::sycl;
 
 // CUDA GPU selector
