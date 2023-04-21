@@ -6,10 +6,11 @@
 #include <string>
 #include <CL/sycl.hpp>
 
-#define ATTRIBUTE_SIZE 2458285
-#define DIMS           68
-#define K              256
-#define ITERATIONS     20
+// portable implementation
+#define RED_ATTRS_PACK_CPU 8
+#define RED_DIMS_PACK_CPU 1
+#define RED_ATTRS_PACK_IGPU 128
+#define RED_DIMS_PACK_IGPU 4
 
 #define RED_ATTRS_PACK_NVIDIA 128
 #define RED_DIMS_PACK_NVIDIA 4
@@ -69,11 +70,11 @@ class Device {
         void _sync();
         void _assign_clusters_simd();
         void _assign_clusters_nvidia();
-        void _assign_clusters_common();
+        void _assign_clusters_portable();
         void _cpu_reduction();
         void _intel_gpu_reduction();
         void _nvidia_reduction();
-        void _common_reduction();
+        void _portable_reduction();
         void _compute_mean();
         std::tuple<int,int,int> _get_group_work_items(int elements);
 };

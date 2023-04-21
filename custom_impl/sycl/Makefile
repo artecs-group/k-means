@@ -1,8 +1,17 @@
 DEVICE = cpu # {cpu, ngpu, igpu}
 DEBUG = no # {yes, no}
-IMPL = sycl-cpu # {sycl-cpu, sycl-ngpu, sycl-igpu, sycl-com}
+IMPL = sycl-cpu # {sycl-cpu, sycl-ngpu, sycl-igpu, sycl-por}
 SYCL = dpcpp # {dpcpp, hipsycl}: hipsycl does not support igpu
 HIPSYCL_COMPILER = clang # {clang, nvc++}
+ATTRIBUTES=2458285
+DIMS=68
+CLUSTERS=256
+ITERATIONS=20
+
+CONF_ATTRS=-DATTRIBUTE_SIZE=$(ATTRIBUTES)
+CONF_DIMS=-DDIMS=$(DIMS)
+CONF_CLUSTERS=-DCLUSTERS=$(CLUSTERS)
+CONF_ITERATIONS=-DITERATIONS=$(ITERATIONS)
 
 # device
 CPU = CPU_DEVICE
@@ -21,7 +30,7 @@ endif
 SCPU = SYCL_CPU
 SNGPU = SYCL_NGPU
 SIGPU = SYCL_IGPU
-SCOM = SYCL_COMMON
+SPOR = SYCL_PORTABLE
 
 PIMPL = $(SCPU)
 
@@ -29,13 +38,13 @@ ifeq ($(IMPL),sycl-ngpu)
   PIMPL = $(SNGPU)
 else ifeq ($(IMPL), sycl-igpu)
   PIMPL = $(SIGPU)
-else ifeq ($(IMPL), sycl-com)
-  PIMPL = $(SCOM)
+else ifeq ($(IMPL), sycl-por)
+  PIMPL = $(SPOR)
 endif
 
 ifeq ($(SYCL), dpcpp)
 	CC = icpx
-	CFLAGS = -O3 -D$(PDEVICE) -D$(PIMPL) -DDPCPP -fsycl
+	CFLAGS = -O3 -fsycl -D$(PDEVICE) -D$(PIMPL) -DDPCPP $(CONF_ATTRS) $(CONF_DIMS) $(CONF_CLUSTERS) $(CONF_ITERATIONS)
 	CLINK = -fsycl-device-code-split=per_kernel
 
 	ifeq ($(PDEVICE), $(NVIDIA))
@@ -47,7 +56,7 @@ else
 		$(error 'DEVICE=igpu' option is not allowed in conjunction to 'SYCL=hipsycl'.)
 	endif
 	CC = syclcc
-	CFLAGS = -O3 -D$(PDEVICE) -D$(PIMPL) -DHIPSYCL
+	CFLAGS = -O3 -D$(PDEVICE) -D$(PIMPL) -DHIPSYCL $(CONF_ATTRS) $(CONF_DIMS) $(CONF_CLUSTERS) $(CONF_ITERATIONS)
 	ifeq ($(PDEVICE),$(NVIDIA))
 		ifeq ($(HIPSYCL_COMPILER),nvc++)
 			CFLAGS += --hipsycl-targets="cuda-nvcxx:cc61"

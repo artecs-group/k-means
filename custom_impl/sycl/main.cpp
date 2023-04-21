@@ -20,7 +20,7 @@ int main(int argc, const char* argv[]) {
         float val;
         for(int j{0}; j < DIMS; j++) {
             line_stream >> val;
-#if defined(SYCL_NGPU)
+#if defined(SYCL_NGPU) || defined(SYCL_COMMON)
             h_attrs[j*ATTRIBUTE_SIZE + i] = val;
 #else
             h_attrs[i*DIMS + j] = val;
@@ -36,16 +36,16 @@ int main(int argc, const char* argv[]) {
     const auto end      = std::chrono::high_resolution_clock::now();
     const auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(end - start);
     std::cout << "Total time = " << duration.count() << "s" << std::endl;
-    std::cout << "Clusters   = " << K << std::endl
+    std::cout << "Clusters   = " << CLUSTERS << std::endl
               << "Dimensions = " << DIMS << std::endl
               << "Atributes  = " << ATTRIBUTE_SIZE << std::endl
               << "Iterations = " << ITERATIONS << std::endl;
               
-    std::vector<float> mean(K*DIMS, 0);
+    std::vector<float> mean(CLUSTERS*DIMS, 0);
     device.save_solution(mean);
 
     // std::cout << std::endl << "Clusters:" << std::endl;
-    // for (size_t cluster{0}; cluster < K; ++cluster) {
+    // for (size_t cluster{0}; cluster < CLUSTERS; ++cluster) {
     //     for(size_t d{0}; d < DIMS; d++)
     //         std::cout << mean[cluster * DIMS + d] << " ";
     //     std::cout << std::endl;
