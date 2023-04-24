@@ -343,8 +343,6 @@ void Device::_nvidia_reduction() {
         size_t size_mean            = RED_DIMS_PACK_NVIDIA * RED_ATTRS_PACK_NVIDIA * sizeof(float);
         size_t size_label           = RED_ATTRS_PACK_NVIDIA * sizeof(unsigned int);
 
-        // cl::sycl::local_accessor<float, 1> mean_package(size_mean, h);
-        // cl::sycl::local_accessor<unsigned int, 1> label_package(size_label, h);
         cl::sycl::accessor<unsigned int, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> label_package(size_label, h);
         cl::sycl::accessor<float, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> mean_package(size_mean, h);
 
@@ -583,21 +581,21 @@ void Device::_cpu_reduction() {
 
 void Device::_portable_reduction() {
 #if defined(INTEL_GPU_DEVICE)
-	constexpr int ATTRS_PACK = RED_ATTRS_PACK_CPU;
-    constexpr int DIMS_PACK = RED_DIMS_PACK_CPU;
+    constexpr int ATTRS_PACK = RED_ATTRS_PACK_IGPU;
+    constexpr int DIMS_PACK = RED_DIMS_PACK_IGPU;
 #elif defined(NVIDIA_DEVICE)
-	constexpr int ATTRS_PACK = RED_ATTRS_PACK_NVIDIA;
+    constexpr int ATTRS_PACK = RED_ATTRS_PACK_NVIDIA;
     constexpr int DIMS_PACK = RED_DIMS_PACK_NVIDIA;
 #elif defined(CPU_DEVICE)
-	constexpr int ATTRS_PACK = RED_ATTRS_PACK_IGPU;
-    constexpr int DIMS_PACK = RED_DIMS_PACK_IGPU;
+    constexpr int ATTRS_PACK = RED_ATTRS_PACK_CPU;
+    constexpr int DIMS_PACK = RED_DIMS_PACK_CPU;
 #endif
-    const int remainder_attr = ATTRIBUTE_SIZE % ATTRS_PACK;
-    const int quotient_attr  = ATTRIBUTE_SIZE / ATTRS_PACK;
-    const int attr_pckg      = quotient_attr + (remainder_attr == 0 ? 0 : 1);
-    const int remainder_dims = DIMS % DIMS_PACK;
-    const int quotient_dims  = DIMS / DIMS_PACK;
-    const int dims_pckg      = quotient_dims + (remainder_dims == 0 ? 0 : 1);
+    constexpr int remainder_attr = ATTRIBUTE_SIZE % ATTRS_PACK;
+    constexpr int quotient_attr  = ATTRIBUTE_SIZE / ATTRS_PACK;
+    constexpr int attr_pckg      = quotient_attr + (remainder_attr == 0 ? 0 : 1);
+    constexpr int remainder_dims = DIMS % DIMS_PACK;
+    constexpr int quotient_dims  = DIMS / DIMS_PACK;
+    constexpr int dims_pckg      = quotient_dims + (remainder_dims == 0 ? 0 : 1);
     cl::sycl::range<2> group_size(DIMS_PACK, ATTRS_PACK);
     cl::sycl::range<2> groups(dims_pckg, attr_pckg);
 
